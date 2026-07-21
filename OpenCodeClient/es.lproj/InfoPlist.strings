@@ -1,0 +1,2 @@
+"NSLocalNetworkUsageDescription" = "OpenCode Client se conecta a los servidores de OpenCode que configures en tu red local.";
+"NSMicrophoneUsageDescription" = "OpenCode Client graba tu voz únicamente cuando eliges dictar un mensaje.";

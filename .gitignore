@@ -1,0 +1,39 @@
+# Xcode user state
+xcuserdata/
+*.xcuserstate
+*.xccheckout
+*.xcscmblueprint
+*.moved-aside
+*.pbxuser
+!default.pbxuser
+
+# Build products
+build/
+DerivedData/
+*.xcresult
+
+# Swift Package Manager
+.build/
+.swiftpm/
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+Local.xcconfig
+Secrets.xcconfig
+
+# Editors and operating systems
+.DS_Store
+.AppleDouble
+.idea/
+*.swp
+*.swo
+*~
+
+# Temporary recordings and diagnostics
+*.wav
+*.pcm
+*.log
+artifacts/
+tmp/
