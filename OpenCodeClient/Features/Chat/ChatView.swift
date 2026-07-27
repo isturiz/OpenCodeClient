@@ -22,11 +22,16 @@ struct ChatView: View {
             }
         }
         .background(AppTheme.canvas)
-        .navigationTitle(model.route?.session.title ?? String(localized: "Chat"))
+        .navigationTitle(model.route?.session.title ?? String(localized: "New Chat"))
         .navigationBarTitleDisplayMode(.inline)
         .toolbar { toolbarContent }
         .safeAreaInset(edge: .bottom, spacing: 0) {
-            ChatComposerView(model: model)
+            VStack(alignment: .leading, spacing: 8) {
+                if model.isNewChat {
+                    targetSelectors
+                }
+                ChatComposerView(model: model)
+            }
         }
         .alert(
             "Something Went Wrong",
@@ -50,6 +55,89 @@ struct ChatView: View {
             }
         }
         .onDisappear { model.suspend() }
+    }
+
+    private var targetSelectors: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: 8) {
+                    serverSelector
+                    projectSelector
+                    Spacer(minLength: 0)
+                }
+                VStack(alignment: .leading, spacing: 8) {
+                    serverSelector
+                    projectSelector
+                }
+            }
+
+            if let targetError = model.targetError {
+                Text(targetError)
+                    .font(.footnote)
+                    .foregroundStyle(.red)
+            }
+        }
+        .padding(.horizontal, AppTheme.compactPadding)
+    }
+
+    private var serverSelector: some View {
+        Menu {
+            ForEach(model.availableProfiles) { profile in
+                Button {
+                    Task { await model.selectProfile(id: profile.id) }
+                } label: {
+                    if profile.id == model.selectedProfileID {
+                        Label(profile.name, systemImage: "checkmark")
+                    } else {
+                        Text(profile.name)
+                    }
+                }
+            }
+        } label: {
+            Label(
+                model.selectedProfile?.name ?? String(localized: "Server"),
+                systemImage: "server.rack"
+            )
+            .lineLimit(1)
+        }
+        .buttonStyle(.glass)
+        .disabled(!model.canChangeTarget || model.availableProfiles.isEmpty)
+        .accessibilityLabel("Choose server")
+        .accessibilityValue(model.selectedProfile?.name ?? String(localized: "None"))
+        .accessibilityIdentifier("new-chat-server")
+    }
+
+    private var projectSelector: some View {
+        Menu {
+            ForEach(model.availableProjects) { project in
+                Button {
+                    Task { await model.selectProject(id: project.id) }
+                } label: {
+                    if project.id == model.selectedProject?.id {
+                        Label(project.name, systemImage: "checkmark")
+                    } else {
+                        Text("\(project.name) — \(project.worktree)")
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if model.isLoadingProjects {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Image(systemName: "folder")
+                }
+                Text(model.selectedProject?.name ?? String(localized: "Choose Project"))
+                    .lineLimit(1)
+            }
+        }
+        .buttonStyle(.glass)
+        .disabled(
+            !model.canChangeTarget || model.isLoadingProjects || model.availableProjects.isEmpty
+        )
+        .accessibilityLabel("Choose project")
+        .accessibilityValue(model.selectedProject?.name ?? String(localized: "None"))
+        .accessibilityIdentifier("new-chat-project")
     }
 
     private var transcript: some View {
@@ -137,7 +225,7 @@ struct ChatView: View {
                 }
             } label: {
                 HStack(spacing: 6) {
-                    Text(model.route?.session.title ?? String(localized: "Chat"))
+                    Text(model.route?.session.title ?? String(localized: "New Chat"))
                         .font(.headline)
                         .lineLimit(1)
                     Image(systemName: "chevron.down")
@@ -147,11 +235,13 @@ struct ChatView: View {
         }
 
         ToolbarItemGroup(placement: .topBarTrailing) {
-            Circle()
-                .fill(model.eventsConnected ? AppTheme.signal : Color.secondary.opacity(0.35))
-                .frame(width: 8, height: 8)
-                .accessibilityLabel(
-                    model.eventsConnected ? "Live updates connected" : "Live updates reconnecting")
+            if !model.isNewChat {
+                Circle()
+                    .fill(model.eventsConnected ? AppTheme.signal : Color.secondary.opacity(0.35))
+                    .frame(width: 8, height: 8)
+                    .accessibilityLabel(
+                        model.eventsConnected ? "Live updates connected" : "Live updates reconnecting")
+            }
 
             Button(action: onOpenSettings) {
                 Image(systemName: "ellipsis")

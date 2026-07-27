@@ -24,15 +24,16 @@ protocol dependencies, exposes renderable state, and cancels stale work when its
 ## Data ownership
 
 OpenCode remains authoritative for projects, sessions, messages, status, models, agents, and permissions.
-The app persists only server profiles, Keychain credentials, the selected profile, and voice settings.
-Network responses are cached in memory and resynchronized after SSE reconnects.
+The app persists server and Voice profiles, Keychain credentials, active-profile choices, and the global
+conversation-organization preference. Network responses are cached in memory and resynchronized after
+SSE reconnects.
 
 ## OpenCode transport
 
-The initial compatibility target is OpenCode 1.18.3. The app uses `/global/health`, `/project`, `/session`,
-`/session/status`, message and prompt endpoints, `/provider`, `/agent`, permission replies, and
-`/global/event`. Project-scoped calls include `directory`. Unknown event and message part discriminators
-are retained as unknown values rather than failing an entire payload.
+The app uses `/global/health`, `/project`, `/session`, `/session/status`, message and prompt endpoints,
+`/provider`, `/agent`, permission replies, and `/global/event`. Project-scoped calls include `directory`.
+Unknown event and message part discriminators are retained as unknown values rather than failing an
+entire payload.
 
 The global SSE stream is one connection per active server. It is cancelled in the background and on
 profile changes. Reconnect uses capped exponential backoff with jitter and is followed by REST

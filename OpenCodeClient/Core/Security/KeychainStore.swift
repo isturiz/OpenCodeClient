@@ -5,9 +5,11 @@ protocol CredentialStoring: Sendable {
     func password(for profileID: UUID) async throws -> String?
     func setPassword(_ password: String, for profileID: UUID) async throws
     func removePassword(for profileID: UUID) async throws
-    func fluidVoicePassword() async throws -> String?
-    func setFluidVoicePassword(_ password: String) async throws
-    func removeFluidVoicePassword() async throws
+    func voicePassword(for profileID: UUID) async throws -> String?
+    func setVoicePassword(_ password: String, for profileID: UUID) async throws
+    func removeVoicePassword(for profileID: UUID) async throws
+    func legacyFluidVoicePassword() async throws -> String?
+    func removeLegacyFluidVoicePassword() async throws
 }
 
 enum KeychainError: Error, LocalizedError, Sendable {
@@ -26,10 +28,14 @@ enum KeychainError: Error, LocalizedError, Sendable {
 
 actor KeychainStore: CredentialStoring {
     private enum Account {
-        static let fluidVoice = "fluidvoice.server"
+        static let legacyFluidVoice = "fluidvoice.server"
 
         static func openCode(profileID: UUID) -> String {
             "opencode.server.\(profileID.uuidString)"
+        }
+
+        static func voice(profileID: UUID) -> String {
+            "fluidvoice.server.\(profileID.uuidString)"
         }
     }
 
@@ -51,16 +57,24 @@ actor KeychainStore: CredentialStoring {
         try removePassword(forAccount: Account.openCode(profileID: profileID))
     }
 
-    func fluidVoicePassword() throws -> String? {
-        try password(forAccount: Account.fluidVoice)
+    func voicePassword(for profileID: UUID) throws -> String? {
+        try password(forAccount: Account.voice(profileID: profileID))
     }
 
-    func setFluidVoicePassword(_ password: String) throws {
-        try setPassword(password, forAccount: Account.fluidVoice)
+    func setVoicePassword(_ password: String, for profileID: UUID) throws {
+        try setPassword(password, forAccount: Account.voice(profileID: profileID))
     }
 
-    func removeFluidVoicePassword() throws {
-        try removePassword(forAccount: Account.fluidVoice)
+    func removeVoicePassword(for profileID: UUID) throws {
+        try removePassword(forAccount: Account.voice(profileID: profileID))
+    }
+
+    func legacyFluidVoicePassword() throws -> String? {
+        try password(forAccount: Account.legacyFluidVoice)
+    }
+
+    func removeLegacyFluidVoicePassword() throws {
+        try removePassword(forAccount: Account.legacyFluidVoice)
     }
 
     private func password(forAccount account: String) throws -> String? {

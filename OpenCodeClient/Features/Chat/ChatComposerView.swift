@@ -8,8 +8,21 @@ struct ChatComposerView: View {
         VStack(spacing: 8) {
             statusLine
 
-            HStack(alignment: .bottom, spacing: 10) {
-                voiceButton
+            HStack(alignment: .bottom, spacing: 2) {
+                Button {
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.body.weight(.semibold))
+                        .frame(
+                            width: AppTheme.minimumHitTarget,
+                            height: AppTheme.minimumHitTarget
+                        )
+                }
+                .buttonStyle(.plain)
+                .disabled(true)
+                .accessibilityLabel("Add attachment")
+                .accessibilityHint("Attachments are not available yet.")
+                .accessibilityIdentifier("chat-add")
 
                 TextField(
                     model.recorder.state == .recording ? "Listening…" : "Message OpenCode",
@@ -18,50 +31,70 @@ struct ChatComposerView: View {
                 )
                 .focused($isFocused)
                 .lineLimit(1...6)
-                .padding(.horizontal, 14)
+                .padding(.horizontal, 8)
                 .padding(.vertical, 12)
-                .background(AppTheme.elevated, in: RoundedRectangle(cornerRadius: 18, style: .continuous))
+                .disabled(model.isSending)
                 .accessibilityIdentifier("chat-composer")
                 .onSubmit {
                     guard model.canSend else { return }
                     Task { await model.send() }
                 }
 
-                if model.status.isBusy {
-                    Button {
-                        Task { await model.abort() }
-                    } label: {
-                        Image(systemName: "stop.fill")
-                            .frame(width: AppTheme.minimumHitTarget, height: AppTheme.minimumHitTarget)
-                    }
-                    .buttonStyle(.glass)
-                    .tint(.red)
-                    .accessibilityLabel("Stop agent")
-                }
+                voiceButton
 
                 Button {
                     Task { await model.send() }
                 } label: {
-                    Image(systemName: "arrow.up")
-                        .font(.body.weight(.bold))
-                        .frame(width: AppTheme.minimumHitTarget, height: AppTheme.minimumHitTarget)
+                    Image(systemName: "arrow.up.circle.fill")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(model.canSend ? AppTheme.signal : .secondary)
+                        .frame(
+                            width: AppTheme.minimumHitTarget,
+                            height: AppTheme.minimumHitTarget
+                        )
                 }
-                .buttonStyle(.glassProminent)
-                .tint(AppTheme.signal)
+                .buttonStyle(.plain)
                 .disabled(!model.canSend)
                 .accessibilityLabel("Send message")
                 .accessibilityIdentifier("chat-send")
             }
+            .padding(.horizontal, 4)
+            .padding(.vertical, 3)
+            .glassEffect(
+                .regular.interactive(),
+                in: RoundedRectangle(cornerRadius: 24, style: .continuous)
+            )
         }
         .padding(.horizontal, AppTheme.compactPadding)
-        .padding(.top, 8)
-        .padding(.bottom, 6)
-        .background(.bar)
+        .padding(.top, 4)
+        .padding(.bottom, 8)
     }
 
     @ViewBuilder
     private var statusLine: some View {
-        if model.recorder.state == .recording {
+        if model.isDeleted {
+            HStack(spacing: 8) {
+                Image(systemName: "trash")
+                Text("This conversation was deleted on the server.")
+                Spacer()
+            }
+            .statusLineStyle()
+        } else if model.submissionOutcomeUncertain {
+            HStack(spacing: 8) {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .foregroundStyle(AppTheme.warning)
+                Text("Request outcome unknown")
+                Spacer()
+            }
+            .statusLineStyle()
+        } else if model.isCreatingSession {
+            HStack(spacing: 8) {
+                ProgressView().controlSize(.small)
+                Text("Creating conversation…")
+                Spacer()
+            }
+            .statusLineStyle()
+        } else if model.recorder.state == .recording {
             HStack(spacing: 8) {
                 Circle()
                     .fill(.red)
@@ -72,25 +105,30 @@ struct ChatComposerView: View {
                     .monospacedDigit()
                 Text("sec")
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .statusLineStyle()
         } else if model.isTranscribing {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small)
                 Text("Transcribing with FluidVoice…")
                 Spacer()
                 Button("Cancel") { model.cancelVoiceWork() }
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(Rectangle())
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .statusLineStyle()
         } else if model.status.isBusy {
             HStack(spacing: 8) {
                 ProgressView().controlSize(.small).tint(AppTheme.signal)
                 Text("OpenCode is working")
                 Spacer()
+                Button("Stop", role: .destructive) {
+                    Task { await model.abort() }
+                }
+                .frame(minWidth: 44, minHeight: 44)
+                .contentShape(Rectangle())
+                .accessibilityLabel("Stop agent")
             }
-            .font(.caption)
-            .foregroundStyle(.secondary)
+            .statusLineStyle()
         }
     }
 
@@ -109,12 +147,20 @@ struct ChatComposerView: View {
                         .font(.body.weight(.semibold))
                 }
             }
+            .foregroundStyle(model.recorder.state == .recording ? .red : AppTheme.signal)
             .frame(width: AppTheme.minimumHitTarget, height: AppTheme.minimumHitTarget)
         }
-        .buttonStyle(.glass)
-        .tint(model.recorder.state == .recording ? .red : AppTheme.signal)
-        .disabled(model.isTranscribing)
-        .accessibilityLabel(model.recorder.state == .recording ? "Stop recording" : "Dictate with FluidVoice")
+        .buttonStyle(.plain)
+        .disabled(model.isTranscribing || model.isSending)
+        .accessibilityLabel(model.recorder.state == .recording ? "Stop recording" : "Dictate with Voice")
         .accessibilityIdentifier("chat-microphone")
+    }
+}
+
+private extension View {
+    func statusLineStyle() -> some View {
+        font(.caption)
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
     }
 }

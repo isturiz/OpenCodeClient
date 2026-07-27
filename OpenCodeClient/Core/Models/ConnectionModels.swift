@@ -33,41 +33,111 @@ struct ServerProfile: Codable, Hashable, Identifiable, Sendable {
     }
 }
 
-struct VoiceConfiguration: Codable, Equatable, Sendable {
+struct VoiceProfile: Codable, Equatable, Hashable, Identifiable, Sendable {
+    var id: UUID
+    var name: String
     var baseURL: String
     var username: String
     var usesPostProcessing: Bool
+    var createdAt: Date
 
-    init(baseURL: String, username: String = "", usesPostProcessing: Bool) {
+    init(
+        id: UUID = UUID(),
+        name: String,
+        baseURL: String,
+        username: String = "",
+        usesPostProcessing: Bool,
+        createdAt: Date = .now
+    ) {
+        self.id = id
+        self.name = name
         self.baseURL = baseURL
         self.username = username
         self.usesPostProcessing = usesPostProcessing
+        self.createdAt = createdAt
     }
 
-    private enum CodingKeys: String, CodingKey {
-        case baseURL
-        case username
-        case usesPostProcessing
+    var displayAddress: String {
+        guard let components = URLComponents(string: baseURL), let host = components.host else {
+            return baseURL
+        }
+
+        if let port = components.port {
+            return "\(host):\(port)"
+        }
+        return host
+    }
+}
+
+enum SessionOrganization: String, Codable, Equatable, Sendable {
+    case project
+    case chronology
+    case projectThenChronology
+
+    var groupsByProject: Bool {
+        self != .chronology
     }
 
-    init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        baseURL = try container.decode(String.self, forKey: .baseURL)
-        username = try container.decodeIfPresent(String.self, forKey: .username) ?? ""
-        usesPostProcessing = try container.decode(Bool.self, forKey: .usesPostProcessing)
+    var groupsByChronology: Bool {
+        self != .project
     }
 
-    static let empty = VoiceConfiguration(baseURL: "", username: "", usesPostProcessing: false)
+    func settingProjectGrouping(_ isEnabled: Bool) -> SessionOrganization {
+        switch (self, isEnabled) {
+        case (.project, false):
+            return .project
+        case (.projectThenChronology, false):
+            return .chronology
+        case (.chronology, true):
+            return .projectThenChronology
+        default:
+            return self
+        }
+    }
+
+    func settingChronologyGrouping(_ isEnabled: Bool) -> SessionOrganization {
+        switch (self, isEnabled) {
+        case (.chronology, false):
+            return .chronology
+        case (.projectThenChronology, false):
+            return .project
+        case (.project, true):
+            return .projectThenChronology
+        default:
+            return self
+        }
+    }
 }
 
 struct SettingsSnapshot: Equatable, Sendable {
     var profiles: [ServerProfile]
     var activeProfileID: UUID?
-    var voice: VoiceConfiguration
+    var voiceProfiles: [VoiceProfile]
+    var activeVoiceProfileID: UUID?
+    var sessionOrganization: SessionOrganization
+
+    init(
+        profiles: [ServerProfile],
+        activeProfileID: UUID?,
+        voiceProfiles: [VoiceProfile] = [],
+        activeVoiceProfileID: UUID? = nil,
+        sessionOrganization: SessionOrganization = .project
+    ) {
+        self.profiles = profiles
+        self.activeProfileID = activeProfileID
+        self.voiceProfiles = voiceProfiles
+        self.activeVoiceProfileID = activeVoiceProfileID
+        self.sessionOrganization = sessionOrganization
+    }
 
     var activeProfile: ServerProfile? {
         guard let activeProfileID else { return nil }
         return profiles.first { $0.id == activeProfileID }
+    }
+
+    var activeVoiceProfile: VoiceProfile? {
+        guard let activeVoiceProfileID else { return nil }
+        return voiceProfiles.first { $0.id == activeVoiceProfileID }
     }
 }
 

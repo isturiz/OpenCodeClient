@@ -3,10 +3,9 @@ import SwiftUI
 struct ProjectsView: View {
     let appModel: AppModel
     let model: ProjectsViewModel
-    let onSelect: (SessionRoute) -> Void
+    let onSelect: (ConversationRoute) -> Void
+    let onNewChat: (OpenCodeProject?) -> Void
     let onOpenSettings: () -> Void
-
-    @State private var createError: String?
 
     var body: some View {
         Group {
@@ -34,16 +33,21 @@ struct ProjectsView: View {
             prompt: "Search sessions"
         )
         .toolbar { toolbarContent }
-        .alert(
-            "Couldn’t Create Session",
-            isPresented: Binding(
-                get: { createError != nil },
-                set: { if !$0 { createError = nil } }
-            )
-        ) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(createError ?? "")
+        .task {
+            model.organization = appModel.sessionOrganization
+        }
+        .task {
+            while !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .seconds(60))
+                } catch {
+                    return
+                }
+                model.refreshChronologyReferenceDate()
+            }
+        }
+        .onChange(of: appModel.sessionOrganization) { _, organization in
+            model.organization = organization
         }
     }
 
@@ -57,15 +61,35 @@ struct ProjectsView: View {
                         .frame(maxWidth: .infinity)
                         .padding(.top, 80)
                 } else {
-                    ForEach(model.filteredSections) { section in
-                        projectSection(section)
-                    }
+                    organizedContent
                 }
             }
             .padding(.horizontal, AppTheme.standardPadding)
-            .padding(.bottom, 110)
+            .padding(.bottom, AppTheme.standardPadding)
         }
         .refreshable { await model.refresh() }
+    }
+
+    @ViewBuilder
+    private var organizedContent: some View {
+        switch model.organization {
+        case .project:
+            ForEach(model.filteredSections) { section in
+                projectSection(section)
+            }
+        case .chronology:
+            if model.chronologySections.isEmpty {
+                emptySessionsView
+            } else {
+                ForEach(model.chronologySections) { section in
+                    chronologySection(section, showsProject: true)
+                }
+            }
+        case .projectThenChronology:
+            ForEach(model.projectChronologySections) { section in
+                projectChronologySection(section)
+            }
+        }
     }
 
     private var serverHeader: some View {
@@ -86,69 +110,124 @@ struct ProjectsView: View {
 
     private func projectSection(_ section: ProjectSection) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 10) {
-                Image(systemName: "folder")
-                    .font(.title3.weight(.medium))
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(section.project.name)
-                        .font(.title3.weight(.semibold))
-                    Text(section.project.worktree)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.tertiary)
-                        .lineLimit(1)
-                }
-                Spacer()
-                Button {
-                    createSession(in: section.project)
-                } label: {
-                    Image(systemName: "square.and.pencil")
-                        .frame(width: AppTheme.minimumHitTarget, height: AppTheme.minimumHitTarget)
-                }
-                .buttonStyle(.plain)
-                .foregroundStyle(.secondary)
-                .disabled(model.isCreatingSession)
-                .accessibilityLabel("New session in \(section.project.name)")
-            }
-            .padding(.bottom, 4)
+            projectHeader(section.project)
 
             if section.sessions.isEmpty {
-                Button {
-                    createSession(in: section.project)
-                } label: {
-                    Label("Start the first session", systemImage: "plus")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 12)
-                }
-                .buttonStyle(.plain)
+                firstSessionButton(in: section.project)
             } else {
                 ForEach(section.sessions) { session in
-                    Button {
-                        if let route = model.route(for: session, in: section.project) {
-                            onSelect(route)
-                        }
-                    } label: {
-                        sessionRow(session)
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityIdentifier("session-\(session.id)")
+                    sessionButton(session, in: section.project, showsProject: false)
                 }
             }
         }
     }
 
-    private func sessionRow(_ session: OpenCodeSession) -> some View {
+    private func projectChronologySection(_ section: ProjectChronologySection) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            projectHeader(section.project)
+
+            if section.chronology.isEmpty {
+                firstSessionButton(in: section.project)
+            } else {
+                ForEach(section.chronology) { chronology in
+                    chronologySection(chronology, showsProject: false)
+                }
+            }
+        }
+    }
+
+    private func projectHeader(_ project: OpenCodeProject) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: "folder")
+                .font(.title3.weight(.medium))
+                .accessibilityHidden(true)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(project.name)
+                    .font(.title3.weight(.semibold))
+                Text(project.worktree)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+            }
+            Spacer()
+            Button {
+                onNewChat(project)
+            } label: {
+                Image(systemName: "square.and.pencil")
+                    .frame(width: AppTheme.minimumHitTarget, height: AppTheme.minimumHitTarget)
+            }
+            .buttonStyle(.plain)
+            .foregroundStyle(.secondary)
+            .accessibilityLabel("New session in \(project.name)")
+        }
+        .padding(.bottom, 4)
+        .accessibilityElement(children: .contain)
+        .accessibilityAddTraits(.isHeader)
+    }
+
+    private func firstSessionButton(in project: OpenCodeProject) -> some View {
+        Button {
+            onNewChat(project)
+        } label: {
+            Label("Start the first session", systemImage: "plus")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .padding(.vertical, 12)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func chronologySection(
+        _ section: SessionChronologySection,
+        showsProject: Bool
+    ) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text(section.bucket.title)
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+
+            ForEach(section.items) { item in
+                sessionButton(item.session, in: item.project, showsProject: showsProject)
+            }
+        }
+    }
+
+    private func sessionButton(
+        _ session: OpenCodeSession,
+        in project: OpenCodeProject,
+        showsProject: Bool
+    ) -> some View {
+        Button {
+            if let route = model.route(for: session, in: project) {
+                onSelect(route)
+            }
+        } label: {
+            sessionRow(session, project: showsProject ? project : nil)
+        }
+        .buttonStyle(.plain)
+        .accessibilityIdentifier("session-\(session.id)")
+    }
+
+    private func sessionRow(_ session: OpenCodeSession, project: OpenCodeProject?) -> some View {
         HStack(alignment: .firstTextBaseline, spacing: 12) {
             if session.parentID != nil {
                 Image(systemName: "arrow.turn.down.right")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
+                    .accessibilityHidden(true)
             }
             VStack(alignment: .leading, spacing: 5) {
                 Text(session.title)
                     .font(.body)
                     .foregroundStyle(.primary)
                     .lineLimit(2)
+                if let project {
+                    Text(project.name)
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 HStack(spacing: 8) {
                     Text(session.updatedAt, format: .relative(presentation: .named))
                     if let summary = session.summary, summary.files > 0 {
@@ -168,9 +247,22 @@ struct ProjectsView: View {
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.tertiary)
+                .accessibilityHidden(true)
         }
         .padding(.vertical, 12)
         .contentShape(Rectangle())
+    }
+
+    private var emptySessionsView: some View {
+        ContentUnavailableView {
+            Label("No conversations", systemImage: "bubble.left.and.bubble.right")
+        } description: {
+            Text("Create a new chat to start a conversation in one of your projects.")
+        } actions: {
+            Button("New Chat") { onNewChat(nil) }
+        }
+        .frame(maxWidth: .infinity)
+        .padding(.top, 60)
     }
 
     @ToolbarContentBuilder
@@ -202,21 +294,76 @@ struct ProjectsView: View {
             }
             .accessibilityLabel("Refresh projects")
 
-            Button(action: onOpenSettings) {
+            Menu {
+                Menu {
+                    Toggle("Project", isOn: projectGroupingBinding)
+                        .disabled(model.organization == .project)
+                        .accessibilityHint("At least one organization option must remain enabled.")
+                    Toggle("Chronology", isOn: chronologyGroupingBinding)
+                        .disabled(model.organization == .chronology)
+                        .accessibilityHint("At least one organization option must remain enabled.")
+                } label: {
+                    Label("Organize", systemImage: "arrow.up.arrow.down")
+                }
+
+                Divider()
+
+                Button(action: onOpenSettings) {
+                    Label("Settings", systemImage: "gearshape")
+                }
+            } label: {
                 Image(systemName: "ellipsis")
             }
-            .accessibilityLabel("Settings")
+            .accessibilityLabel("More Options")
+        }
+
+        DefaultToolbarItem(kind: .search, placement: .bottomBar)
+        ToolbarSpacer(.fixed, placement: .bottomBar)
+        ToolbarItem(placement: .bottomBar) {
+            Button {
+                onNewChat(nil)
+            } label: {
+                Image(systemName: "square.and.pencil")
+            }
+            .accessibilityLabel("New Chat")
+            .accessibilityIdentifier("new-chat")
         }
     }
 
-    private func createSession(in project: OpenCodeProject) {
+    private var projectGroupingBinding: Binding<Bool> {
+        Binding(
+            get: { model.organization.groupsByProject },
+            set: { setOrganization(model.organization.settingProjectGrouping($0)) }
+        )
+    }
+
+    private var chronologyGroupingBinding: Binding<Bool> {
+        Binding(
+            get: { model.organization.groupsByChronology },
+            set: { setOrganization(model.organization.settingChronologyGrouping($0)) }
+        )
+    }
+
+    private func setOrganization(_ organization: SessionOrganization) {
+        model.organization = organization
         Task {
-            do {
-                let route = try await model.createSession(in: project)
-                onSelect(route)
-            } catch {
-                createError = error.localizedDescription
-            }
+            await appModel.saveSessionOrganization(organization)
+            model.organization = appModel.sessionOrganization
+        }
+    }
+}
+
+private extension SessionChronologyBucket {
+    var title: LocalizedStringResource {
+        switch self {
+        case .today:
+            "Today"
+        case .yesterday:
+            "Yesterday"
+        case .previousSevenDays:
+            "Previous 7 Days"
+        case .earlier:
+            "Earlier"
         }
     }
 }

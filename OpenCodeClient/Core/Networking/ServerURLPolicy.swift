@@ -15,6 +15,8 @@ enum ServerURLPolicy {
             scheme == "http" || scheme == "https",
             let host = components.host,
             !host.isEmpty,
+            components.user == nil,
+            components.password == nil,
             components.query == nil,
             components.fragment == nil
         else {
@@ -49,7 +51,9 @@ enum ServerURLPolicy {
             return true
         }
 
-        if host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("fe80:") {
+        if host.contains(":"),
+            host.hasPrefix("fc") || host.hasPrefix("fd") || host.hasPrefix("fe80:")
+        {
             return true
         }
 

@@ -16,7 +16,7 @@ The project is in active early development. The first milestone provides a compl
 - Real-time chat over REST and Server-Sent Events
 - Tool, reasoning, status, and permission rendering
 - Model and agent selection
-- FluidVoice batch transcription through its local HTTP API
+- Multiple FluidVoice profiles and batch transcription through its local HTTP API
 - Adaptive iPhone and iPad layouts built for iOS 26
 - English and Spanish localization
 
@@ -24,7 +24,7 @@ The project is in active early development. The first milestone provides a compl
 
 - Xcode 26.6 or newer
 - iOS or iPadOS 26.0 or newer
-- OpenCode 1.18.3 or a compatible server
+- A reachable OpenCode server
 - FluidVoice 1.6.4 or newer for optional voice transcription
 
 ## Run OpenCode
@@ -81,7 +81,8 @@ xcodebuild build \
 
 The app uses feature-oriented SwiftUI code, Swift Observation, Swift Concurrency, URLSession, and a
 small set of protocol boundaries for deterministic tests. Server data remains authoritative; only
-connection profiles, secrets, and voice preferences are persisted locally.
+connection profiles, active profile choices, secrets, voice preferences, and conversation organization
+are persisted locally.
 
 See [Architecture](docs/ARCHITECTURE.md), [Setup](docs/SETUP.md), and
 [Roadmap](docs/ROADMAP.md) for details.

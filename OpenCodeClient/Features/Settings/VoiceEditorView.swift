@@ -1,9 +1,8 @@
 import SwiftUI
 
-struct ServerEditorView: View {
+struct VoiceEditorView: View {
     let appModel: AppModel
-    let profile: ServerProfile?
-    var makeActive = false
+    let profile: VoiceProfile?
     private let draftID: UUID
 
     @Environment(\.dismiss) private var dismiss
@@ -11,54 +10,53 @@ struct ServerEditorView: View {
     @State private var baseURL: String
     @State private var username: String
     @State private var password = ""
+    @State private var usesPostProcessing: Bool
     @State private var isLoadingCredential: Bool
     @State private var credentialLoadFailed = false
     @State private var isTesting = false
     @State private var isSaving = false
-    @State private var testResult: OpenCodeHealth?
+    @State private var testResult: FluidVoiceHealth?
     @State private var errorMessage: String?
     @State private var testGeneration = UUID()
 
-    init(appModel: AppModel, profile: ServerProfile? = nil, makeActive: Bool = false) {
+    init(appModel: AppModel, profile: VoiceProfile? = nil) {
         self.appModel = appModel
         self.profile = profile
-        self.makeActive = makeActive
         draftID = profile?.id ?? UUID()
         _name = State(initialValue: profile?.name ?? "")
         _baseURL = State(initialValue: profile?.baseURL ?? "")
-        _username = State(initialValue: profile?.username ?? "opencode")
+        _username = State(initialValue: profile?.username ?? "")
+        _usesPostProcessing = State(initialValue: profile?.usesPostProcessing ?? false)
         _isLoadingCredential = State(initialValue: profile != nil)
     }
 
     var body: some View {
         NavigationStack {
             Form {
-                Section {
-                    TextField("Name", text: $name, prompt: Text("Home Mac"))
+                Section("Voice Server") {
+                    TextField("Name", text: $name, prompt: Text("Studio Mac"))
                         .textContentType(.organizationName)
-                        .accessibilityIdentifier("server-name")
+                        .accessibilityIdentifier("voice-name")
 
-                    TextField("URL", text: $baseURL, prompt: Text("https://mac.example.ts.net"))
+                    TextField("FluidVoice URL", text: $baseURL, prompt: Text("https://voice.example.com"))
                         .textContentType(.URL)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .accessibilityIdentifier("server-url")
-                } header: {
-                    Text("Server")
+                        .accessibilityIdentifier("fluidvoice-url")
                 }
 
                 Section {
-                    TextField("Username", text: $username, prompt: Text("opencode"))
+                    TextField("Username", text: $username)
                         .textContentType(.username)
                         .textInputAutocapitalization(.never)
                         .autocorrectionDisabled()
-                        .accessibilityIdentifier("server-username")
+                        .accessibilityIdentifier("fluidvoice-username")
 
                     SecureField("Password", text: $password)
                         .textContentType(.password)
                         .disabled(isLoadingCredential || credentialLoadFailed)
-                        .accessibilityIdentifier("server-password")
+                        .accessibilityIdentifier("fluidvoice-password")
 
                     if isLoadingCredential {
                         HStack {
@@ -78,11 +76,13 @@ struct ServerEditorView: View {
                 }
 
                 Section {
+                    Toggle("Post-process with Fluid Intelligence", isOn: $usesPostProcessing)
+
                     Button {
                         testConnection()
                     } label: {
                         HStack {
-                            Label("Test Connection", systemImage: "network")
+                            Label("Test FluidVoice", systemImage: "waveform")
                             Spacer()
                             if isTesting {
                                 ProgressView()
@@ -96,20 +96,20 @@ struct ServerEditorView: View {
                         isLoadingCredential || credentialLoadFailed || isTesting
                             || baseURL.trimmed.isEmpty
                     )
-                    .accessibilityIdentifier("test-server-connection")
+                    .accessibilityIdentifier("test-voice-connection")
 
                     if let testResult {
-                        LabeledContent("OpenCode Version", value: testResult.version)
+                        LabeledContent("FluidVoice Version", value: testResult.version)
                     }
                     if let errorMessage {
                         Text(errorMessage)
                             .font(.footnote)
                             .foregroundStyle(.red)
-                            .accessibilityIdentifier("server-error")
+                            .accessibilityIdentifier("voice-error")
                     }
                 }
             }
-            .navigationTitle(profile == nil ? "Add Server" : "Edit Server")
+            .navigationTitle(profile == nil ? "Add Voice Server" : "Edit Voice Server")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
@@ -121,14 +121,14 @@ struct ServerEditorView: View {
                             isLoadingCredential || credentialLoadFailed || name.trimmed.isEmpty
                                 || baseURL.trimmed.isEmpty || isSaving
                         )
-                        .accessibilityIdentifier("save-server")
+                        .accessibilityIdentifier("save-voice")
                 }
             }
             .task {
                 guard let profile else { return }
                 defer { isLoadingCredential = false }
                 do {
-                    password = try await appModel.password(for: profile.id)
+                    password = try await appModel.voicePassword(for: profile.id)
                 } catch {
                     credentialLoadFailed = true
                     errorMessage = error.localizedDescription
@@ -141,12 +141,13 @@ struct ServerEditorView: View {
         }
     }
 
-    private var draftProfile: ServerProfile {
-        ServerProfile(
+    private var draftProfile: VoiceProfile {
+        VoiceProfile(
             id: draftID,
             name: name,
             baseURL: baseURL,
             username: username,
+            usesPostProcessing: usesPostProcessing,
             createdAt: profile?.createdAt ?? .now
         )
     }
@@ -160,11 +161,11 @@ struct ServerEditorView: View {
         Task {
             defer { isTesting = false }
             do {
-                let health = try await appModel.test(profile: draftProfile, password: password)
+                let health = try await appModel.testVoice(profile: draftProfile, password: password)
                 guard testGeneration == requestedGeneration else { return }
                 testResult = health
                 if !health.isHealthy {
-                    errorMessage = String(localized: "OpenCode reported an unhealthy status.")
+                    errorMessage = String(localized: "FluidVoice reported an unhealthy status.")
                 }
             } catch {
                 guard testGeneration == requestedGeneration else { return }
@@ -179,7 +180,7 @@ struct ServerEditorView: View {
         Task {
             defer { isSaving = false }
             do {
-                try await appModel.save(profile: draftProfile, password: password, makeActive: makeActive)
+                try await appModel.saveVoiceProfile(draftProfile, password: password)
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription

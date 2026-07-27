@@ -12,8 +12,7 @@
             let settings = FixtureSettingsStore(
                 snapshot: SettingsSnapshot(
                     profiles: [profile],
-                    activeProfileID: profile.id,
-                    voice: .empty
+                    activeProfileID: profile.id
                 )
             )
             let client = FixtureOpenCodeClient()
@@ -26,7 +25,7 @@
 
         static let uiTestEmpty = AppDependencies(
             settings: FixtureSettingsStore(
-                snapshot: SettingsSnapshot(profiles: [], activeProfileID: nil, voice: .empty)
+                snapshot: SettingsSnapshot(profiles: [], activeProfileID: nil)
             ),
             makeOpenCodeClient: { _ in FixtureOpenCodeClient() },
             makeFluidVoiceClient: { _ in FixtureFluidVoiceClient() }
@@ -36,7 +35,7 @@
     private actor FixtureSettingsStore: SettingsStoring {
         private var value: SettingsSnapshot
         private var passwords: [UUID: String] = [:]
-        private var voicePassword: String?
+        private var voicePasswords: [UUID: String] = [:]
 
         init(snapshot: SettingsSnapshot) {
             value = snapshot
@@ -58,10 +57,29 @@
 
         func setActive(profileID: UUID?) { value.activeProfileID = profileID }
         func password(for profileID: UUID) -> String? { passwords[profileID] }
-        func fluidVoicePassword() -> String? { voicePassword }
-        func saveVoiceConfiguration(_ configuration: VoiceConfiguration, password: String?) {
-            value.voice = configuration
-            if let password { voicePassword = password.isEmpty ? nil : password }
+
+        func upsertVoiceProfile(_ profile: VoiceProfile, password: String?) {
+            value.voiceProfiles.removeAll { $0.id == profile.id }
+            value.voiceProfiles.append(profile)
+            if let password { voicePasswords[profile.id] = password.isEmpty ? nil : password }
+        }
+
+        func deleteVoiceProfile(profileID: UUID) {
+            value.voiceProfiles.removeAll { $0.id == profileID }
+            voicePasswords[profileID] = nil
+            if value.activeVoiceProfileID == profileID { value.activeVoiceProfileID = nil }
+        }
+
+        func setActiveVoiceProfile(profileID: UUID?) {
+            value.activeVoiceProfileID = profileID
+        }
+
+        func voicePassword(for profileID: UUID) -> String? {
+            voicePasswords[profileID]
+        }
+
+        func saveSessionOrganization(_ organization: SessionOrganization) {
+            value.sessionOrganization = organization
         }
     }
 

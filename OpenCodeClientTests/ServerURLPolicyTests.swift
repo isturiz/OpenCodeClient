@@ -29,6 +29,18 @@ struct ServerURLPolicyTests {
         }
     }
 
+    @Test func rejectsCredentialsEmbeddedInURL() {
+        #expect(throws: NetworkError.invalidURL) {
+            try ServerURLPolicy.normalizedURL(from: "https://user:secret@example.com")
+        }
+    }
+
+    @Test func publicHostnameStartingWithIPv6PrefixStillRequiresHTTPS() {
+        #expect(throws: NetworkError.insecureRemoteURL) {
+            try ServerURLPolicy.normalizedURL(from: "http://fd-example.com")
+        }
+    }
+
     @Test func preservesReverseProxyPathAndEncodesDirectory() throws {
         let baseURL = try ServerURLPolicy.normalizedURL(from: "https://example.com/opencode/")
         let result = try ServerURLPolicy.appending(

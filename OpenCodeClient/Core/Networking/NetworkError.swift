@@ -25,7 +25,7 @@ enum NetworkError: Error, Equatable, LocalizedError, Sendable {
                 String(localized: "Server returned HTTP \(status).")
             }
         case .decoding:
-            String(localized: "The server response is not compatible with this app version.")
+            String(localized: "The server returned data that could not be read.")
         case .timedOut:
             String(localized: "The request timed out. Check the server and your network connection.")
         case .cancelled:
