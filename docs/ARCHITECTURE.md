@@ -30,21 +30,32 @@ SSE reconnects.
 
 ## OpenCode transport
 
-The app uses `/global/health`, `/project`, `/session`, `/session/status`, message and prompt endpoints,
-`/provider`, `/agent`, permission replies, and `/global/event`. Project-scoped calls include `directory`.
-Unknown event and message part discriminators are retained as unknown values rather than failing an
-entire payload.
+The app uses the released V2 `/api/info`, `/api/project`, `/api/session`, `/api/session/active`,
+`/api/model`, `/api/agent`, `/api/fs/*`, permission, and `/api/event` endpoints. There is no fixed server
+patch-release requirement. Project-scoped calls include `directory`; location-scoped resources also
+use the V2 `location[directory]` query. Session creation carries `location` in its body. Subsequent
+session operations use the session's directory, which can differ from the project's canonical root.
 
-The global SSE stream is one connection per active server. It is cancelled in the background and on
-profile changes. Reconnect uses capped exponential backoff with jitter and is followed by REST
-reconciliation.
+Sessions and messages have cursor pagination. Messages are a typed timeline with assistant `content`,
+not V1 `info`/`parts` envelopes. Model references use `id`, `providerID`, and optional `variant`; selecting
+models or agents updates session state before sending a text prompt. Unknown message and content
+discriminators are retained without decoding their future-specific fields.
+
+The server-wide SSE stream carries direct `{type, location, data}` events. It is cancelled in the
+background and on profile changes. Reconnect, including orderly EOF, uses capped exponential backoff
+with jitter. Events are live-only: a connected marker reconciles the session, messages, active status,
+and pending permissions. Timeline deltas trigger throttled authoritative reads, so continuous output
+does not starve refresh and content ordinals do not need to be guessed. Stream failures and bounded
+buffer overflow trigger recovery rather than silently losing pending permissions.
 
 ## Voice transport
 
 Audio capture is native AVFoundation. It writes PCM16 mono WAV at 16 kHz to a protected temporary file.
 Stopping capture uploads the file to FluidVoice `/v1/transcribe`; optional post-processing calls
 `/v1/postprocess`. Optional HTTP Basic credentials are applied to every FluidVoice request for protected
-reverse proxies. The transcript is inserted into the composer for review and is never auto-submitted.
+reverse proxies. Direct Tailscale Serve needs no Basic credentials: tailnet rules control access, and
+the proxy connects to FluidVoice on loopback. The transcript is inserted into the composer for review
+and is never auto-submitted.
 
 ## Dependency policy
 

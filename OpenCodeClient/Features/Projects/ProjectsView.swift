@@ -7,6 +7,8 @@ struct ProjectsView: View {
     let onNewChat: (OpenCodeProject?) -> Void
     let onOpenSettings: () -> Void
 
+    @State private var collapsedProjectPaths: Set<String> = []
+
     var body: some View {
         Group {
             switch model.phase {
@@ -35,6 +37,7 @@ struct ProjectsView: View {
         .toolbar { toolbarContent }
         .task {
             model.organization = appModel.sessionOrganization
+            model.setPinnedSessions(appModel.pinnedSessions, profileID: appModel.activeProfileID)
         }
         .task {
             while !Task.isCancelled {
@@ -48,6 +51,13 @@ struct ProjectsView: View {
         }
         .onChange(of: appModel.sessionOrganization) { _, organization in
             model.organization = organization
+        }
+        .onChange(of: appModel.pinnedSessions) { _, references in
+            model.setPinnedSessions(references, profileID: appModel.activeProfileID)
+        }
+        .onChange(of: appModel.activeProfileID) { _, profileID in
+            collapsedProjectPaths = []
+            model.setPinnedSessions(appModel.pinnedSessions, profileID: profileID)
         }
     }
 
@@ -78,9 +88,12 @@ struct ProjectsView: View {
                 projectSection(section)
             }
         case .chronology:
-            if model.chronologySections.isEmpty {
+            if model.chronologySections.isEmpty && model.pinnedChronologyItems.isEmpty {
                 emptySessionsView
             } else {
+                if !model.pinnedChronologyItems.isEmpty {
+                    pinnedSection(model.pinnedChronologyItems, showsProject: true)
+                }
                 ForEach(model.chronologySections) { section in
                     chronologySection(section, showsProject: true)
                 }
@@ -110,13 +123,15 @@ struct ProjectsView: View {
 
     private func projectSection(_ section: ProjectSection) -> some View {
         VStack(alignment: .leading, spacing: 4) {
-            projectHeader(section.project)
+            projectHeader(section.project, isExpanded: isExpanded(section.project))
 
-            if section.sessions.isEmpty {
-                firstSessionButton(in: section.project)
-            } else {
-                ForEach(section.sessions) { session in
-                    sessionButton(session, in: section.project, showsProject: false)
+            if isExpanded(section.project) {
+                if section.sessions.isEmpty {
+                    firstSessionButton(in: section.project)
+                } else {
+                    ForEach(section.sessions) { session in
+                        sessionButton(session, in: section.project, showsProject: false)
+                    }
                 }
             }
         }
@@ -124,26 +139,50 @@ struct ProjectsView: View {
 
     private func projectChronologySection(_ section: ProjectChronologySection) -> some View {
         VStack(alignment: .leading, spacing: 12) {
-            projectHeader(section.project)
+            projectHeader(section.project, isExpanded: isExpanded(section.project))
 
-            if section.chronology.isEmpty {
-                firstSessionButton(in: section.project)
-            } else {
-                ForEach(section.chronology) { chronology in
-                    chronologySection(chronology, showsProject: false)
+            if isExpanded(section.project) {
+                if section.pinned.isEmpty && section.chronology.isEmpty {
+                    firstSessionButton(in: section.project)
+                } else {
+                    if !section.pinned.isEmpty {
+                        pinnedSection(section.pinned, showsProject: false)
+                    }
+                    ForEach(section.chronology) { chronology in
+                        chronologySection(chronology, showsProject: false)
+                    }
                 }
             }
         }
     }
 
-    private func projectHeader(_ project: OpenCodeProject) -> some View {
+    private func projectHeader(_ project: OpenCodeProject, isExpanded: Bool) -> some View {
         HStack(spacing: 10) {
             Image(systemName: "folder")
                 .font(.title3.weight(.medium))
                 .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
-                Text(project.name)
-                    .font(.title3.weight(.semibold))
+                HStack(spacing: 2) {
+                    Text(project.name)
+                        .font(.title3.weight(.semibold))
+                    Button {
+                        toggleExpanded(project)
+                    } label: {
+                        Image(systemName: isExpanded ? "chevron.down" : "chevron.right")
+                            .font(.caption.weight(.semibold))
+                            .frame(
+                                width: AppTheme.minimumHitTarget,
+                                height: AppTheme.minimumHitTarget
+                            )
+                    }
+                    .buttonStyle(.plain)
+                    .foregroundStyle(.secondary)
+                    .disabled(isSearching)
+                    .accessibilityLabel(
+                        isExpanded ? "Collapse \(project.name)" : "Expand \(project.name)"
+                    )
+                    .accessibilityIdentifier("project-disclosure-\(project.id)")
+                }
                 Text(project.worktree)
                     .font(.caption.monospaced())
                     .foregroundStyle(.tertiary)
@@ -163,6 +202,19 @@ struct ProjectsView: View {
         .padding(.bottom, 4)
         .accessibilityElement(children: .contain)
         .accessibilityAddTraits(.isHeader)
+    }
+
+    private func pinnedSection(_ items: [SessionListItem], showsProject: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Text("Pinned")
+                .font(.headline)
+                .foregroundStyle(.secondary)
+                .accessibilityAddTraits(.isHeader)
+
+            ForEach(items) { item in
+                sessionButton(item.session, in: item.project, showsProject: showsProject)
+            }
+        }
     }
 
     private func firstSessionButton(in project: OpenCodeProject) -> some View {
@@ -243,6 +295,12 @@ struct ProjectsView: View {
                     .controlSize(.small)
                     .tint(AppTheme.signal)
                     .accessibilityLabel("Agent working")
+            }
+            if model.isPinned(session.id) {
+                Image(systemName: "pin.fill")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .accessibilityLabel("Pinned")
             }
             Image(systemName: "chevron.right")
                 .font(.caption.weight(.semibold))
@@ -349,6 +407,23 @@ struct ProjectsView: View {
         Task {
             await appModel.saveSessionOrganization(organization)
             model.organization = appModel.sessionOrganization
+        }
+    }
+
+    private var isSearching: Bool {
+        !model.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    private func isExpanded(_ project: OpenCodeProject) -> Bool {
+        isSearching || !collapsedProjectPaths.contains(project.worktree)
+    }
+
+    private func toggleExpanded(_ project: OpenCodeProject) {
+        guard !isSearching else { return }
+        if collapsedProjectPaths.contains(project.worktree) {
+            collapsedProjectPaths.remove(project.worktree)
+        } else {
+            collapsedProjectPaths.insert(project.worktree)
         }
     }
 }

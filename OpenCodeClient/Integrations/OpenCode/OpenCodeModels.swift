@@ -32,6 +32,64 @@ struct OpenCodeSession: Equatable, Hashable, Identifiable, Sendable {
     let createdAt: Date
     let updatedAt: Date
     let summary: Summary?
+    var agentID: String? = nil
+    var providerID: String? = nil
+    var modelID: String? = nil
+    var variant: String? = nil
+}
+
+enum OpenCodeFileDiffStatus: Equatable, Hashable, Sendable {
+    case added
+    case modified
+    case deleted
+    case unknown(String)
+}
+
+struct OpenCodeFileDiff: Equatable, Hashable, Identifiable, Sendable {
+    let path: String
+    let status: OpenCodeFileDiffStatus
+    let additions: Int
+    let deletions: Int
+    let patch: String?
+    let before: String?
+    let after: String?
+
+    var id: String { path }
+
+    var rawPatch: String? {
+        if let patch, !patch.isEmpty {
+            return patch
+        }
+        guard before != nil || after != nil else { return nil }
+        return "--- Before\n\(before ?? "")\n+++ After\n\(after ?? "")"
+    }
+}
+
+enum OpenCodeFileNodeType: Equatable, Hashable, Sendable {
+    case file
+    case directory
+    case unknown(String)
+}
+
+struct OpenCodeFileNode: Equatable, Hashable, Identifiable, Sendable {
+    let name: String
+    let path: String
+    let absolutePath: String?
+    let type: OpenCodeFileNodeType
+    let isIgnored: Bool
+
+    var id: String { path }
+}
+
+enum OpenCodeFileContentType: Equatable, Hashable, Sendable {
+    case text
+    case binary
+    case unknown(String)
+}
+
+struct OpenCodeFileContent: Equatable, Hashable, Sendable {
+    let type: OpenCodeFileContentType
+    let content: String?
 }
 
 enum OpenCodeSessionStatus: Equatable, Sendable {
@@ -147,8 +205,11 @@ struct ModelOption: Equatable, Hashable, Identifiable, Sendable {
     let providerName: String
     let name: String
     let isConnected: Bool
+    var variant: String? = nil
 
-    var id: String { "\(providerID)/\(modelID)" }
+    var id: String {
+        "\(providerID)/\(modelID)" + (variant.map { "#\($0)" } ?? "")
+    }
 }
 
 struct AgentOption: Equatable, Hashable, Identifiable, Sendable {
@@ -156,8 +217,9 @@ struct AgentOption: Equatable, Hashable, Identifiable, Sendable {
     let description: String?
     let mode: String
     let isBuiltIn: Bool
+    var agentID: String? = nil
 
-    var id: String { name }
+    var id: String { agentID ?? name }
 }
 
 enum OpenCodeEvent: Equatable, Sendable {
@@ -165,6 +227,8 @@ enum OpenCodeEvent: Equatable, Sendable {
     case sessionCreated(OpenCodeSession)
     case sessionUpdated(OpenCodeSession)
     case sessionDeleted(OpenCodeSession)
+    case sessionChanged(sessionID: String)
+    case sessionRemoved(sessionID: String)
     case sessionStatus(sessionID: String, status: OpenCodeSessionStatus)
     case sessionIdle(sessionID: String)
     case messageChanged(sessionID: String)

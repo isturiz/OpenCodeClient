@@ -32,6 +32,7 @@ struct SessionChronologySection: Identifiable, Sendable {
 
 struct ProjectChronologySection: Identifiable, Sendable {
     let project: OpenCodeProject
+    var pinned: [SessionListItem]
     var chronology: [SessionChronologySection]
 
     var id: String { project.id }

@@ -46,7 +46,8 @@ protocol FluidVoiceClientProtocol: Sendable {
 }
 
 actor LiveFluidVoiceClient: FluidVoiceClientProtocol {
-    static let maximumUploadBytes = 25 * 1_024 * 1_024
+    // FluidVoice caps the complete HTTP request at 25 MiB, including its headers.
+    static let maximumUploadBytes = 24 * 1_024 * 1_024
 
     private let baseURL: URL
     private let username: String
@@ -85,6 +86,7 @@ actor LiveFluidVoiceClient: FluidVoiceClientProtocol {
         var request = try request(path: "/v1/transcribe", method: "POST")
         request.setValue("audio/wav", forHTTPHeaderField: "Content-Type")
         request.setValue("dictation.wav", forHTTPHeaderField: "X-Filename")
+        request.setValue(String(size), forHTTPHeaderField: "Content-Length")
         let data = try await http.upload(for: request, fromFile: fileURL)
 
         do {

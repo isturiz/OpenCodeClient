@@ -230,7 +230,7 @@ struct SettingsView: View {
     private var aboutSection: some View {
         Section("About") {
             LabeledContent("App", value: "OpenCode Client")
-            Link("OpenCode Documentation", destination: URL(string: "https://opencode.ai/docs/server/")!)
+            Link("OpenCode Documentation", destination: URL(string: "https://opencode.ai/v2/docs/api/")!)
             Text("Independent community project. Not affiliated with the OpenCode team.")
                 .font(.footnote)
                 .foregroundStyle(.secondary)

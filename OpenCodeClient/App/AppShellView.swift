@@ -76,7 +76,15 @@ struct AppShellView: View {
                     model: conversationModel(for: route),
                     conversationRoute: route,
                     onSessionRouteChanged: { promote(route.id, to: $0) },
-                    onOpenSettings: { showsSettings = true }
+                    onNewChat: { sessionRoute in
+                        selectCompact(
+                            newChatRoute(
+                                profileID: sessionRoute.profileID,
+                                project: sessionRoute.project
+                            )
+                        )
+                    },
+                    onTogglePin: { togglePin($0) }
                 )
                 .id(route.id)
             }
@@ -101,7 +109,15 @@ struct AppShellView: View {
                         model: conversationModel(for: selectedRoute),
                         conversationRoute: selectedRoute,
                         onSessionRouteChanged: { promote(selectedRoute.id, to: $0) },
-                        onOpenSettings: { showsSettings = true }
+                        onNewChat: { sessionRoute in
+                            selectRegular(
+                                newChatRoute(
+                                    profileID: sessionRoute.profileID,
+                                    project: sessionRoute.project
+                                )
+                            )
+                        },
+                        onTogglePin: { togglePin($0) }
                     )
                 }
                 .id(selectedRoute.id)
@@ -117,10 +133,13 @@ struct AppShellView: View {
         .navigationSplitViewStyle(.balanced)
     }
 
-    private func newChatRoute(project: OpenCodeProject?) -> ConversationRoute {
+    private func newChatRoute(
+        profileID: UUID? = nil,
+        project: OpenCodeProject?
+    ) -> ConversationRoute {
         ConversationRoute(
             destination: .newChat(
-                NewChatRoute(profileID: appModel.activeProfileID, project: project)
+                NewChatRoute(profileID: profileID ?? appModel.activeProfileID, project: project)
             )
         )
     }
@@ -193,6 +212,19 @@ struct AppShellView: View {
         }
         cleanConversationModels()
     }
+
+    private func togglePin(_ route: SessionRoute) {
+        Task {
+            await appModel.togglePinnedSession(
+                profileID: route.profileID,
+                sessionID: route.session.id
+            )
+            projectsModel.setPinnedSessions(
+                appModel.pinnedSessions,
+                profileID: appModel.activeProfileID
+            )
+        }
+    }
 }
 
 private struct ChatContainerView: View {
@@ -200,74 +232,128 @@ private struct ChatContainerView: View {
     let model: ChatViewModel
     let conversationRoute: ConversationRoute
     let onSessionRouteChanged: (SessionRoute) -> Void
-    let onOpenSettings: () -> Void
+    let onNewChat: (SessionRoute) -> Void
+    let onTogglePin: (SessionRoute) -> Void
+
+    @State private var reviewClient: (any OpenCodeClientProtocol)?
+    @State private var showsChanges = false
+    @State private var showsFiles = false
 
     var body: some View {
-        ChatView(model: model, onOpenSettings: onOpenSettings)
-            .task(id: appModel.serverConfigurationRevision) {
-                let voiceClient = try? await appModel.activeVoiceClient()
-                let usesPostProcessing = appModel.activeVoiceProfile?.usesPostProcessing ?? false
+        ChatView(
+            model: model,
+            serverName: serverName,
+            isPinned: model.route.map {
+                appModel.isSessionPinned(profileID: $0.profileID, sessionID: $0.session.id)
+            } ?? false,
+            onNewChat: {
+                guard let route = model.route else { return }
+                onNewChat(route)
+            },
+            onTogglePin: {
+                guard let route = model.route else { return }
+                onTogglePin(route)
+            },
+            onOpenChanges: { showsChanges = true },
+            onOpenFiles: { showsFiles = true }
+        )
+        .navigationDestination(isPresented: $showsChanges) {
+            if let route = model.route, let reviewClient {
+                ChangesView(
+                    sessionID: route.session.id,
+                    directory: route.session.directory,
+                    client: reviewClient
+                )
+            } else {
+                LoadingStateView(title: "Loading changes…")
+            }
+        }
+        .navigationDestination(isPresented: $showsFiles) {
+            if let route = model.route, let reviewClient {
+                FilesView(directory: route.session.directory, client: reviewClient)
+            } else {
+                LoadingStateView(title: "Loading files…")
+            }
+        }
+        .task(id: appModel.serverConfigurationRevision) {
+            let voiceClient = try? await appModel.activeVoiceClient()
+            let usesPostProcessing = appModel.activeVoiceProfile?.usesPostProcessing ?? false
 
-                if let route = model.route {
-                    guard let profile = appModel.profile(withID: route.profileID) else {
-                        model.presentedError = String(
-                            localized: "The server profile for this session no longer exists.")
-                        return
-                    }
-                    do {
-                        let client = try await appModel.client(for: profile)
-                        await model.reconfigureClient(client)
-                    } catch {
-                        model.presentedError = error.localizedDescription
-                    }
+            if let route = model.route {
+                guard let profile = appModel.profile(withID: route.profileID) else {
+                    model.presentedError = String(
+                        localized: "The server profile for this session no longer exists.")
                     return
                 }
+                do {
+                    let client = try await appModel.client(for: profile)
+                    reviewClient = client
+                    await model.reconfigureClient(client)
+                } catch {
+                    model.presentedError = error.localizedDescription
+                }
+                return
+            }
 
-                if model.phase != .idle {
-                    await model.refreshDraftConfiguration(appModel.profiles)
+            if model.phase != .idle {
+                await model.refreshDraftConfiguration(appModel.profiles)
+                return
+            }
+
+            switch conversationRoute.destination {
+            case let .session(route):
+                guard let profile = appModel.profile(withID: route.profileID) else {
+                    model.presentedError = String(
+                        localized: "The server profile for this session no longer exists.")
                     return
                 }
-
-                switch conversationRoute.destination {
-                case let .session(route):
-                    guard let profile = appModel.profile(withID: route.profileID) else {
-                        model.presentedError = String(
-                            localized: "The server profile for this session no longer exists.")
-                        return
-                    }
-                    do {
-                        let client = try await appModel.client(for: profile)
-                        await model.configure(
-                            route: route,
-                            client: client,
-                            voiceClient: voiceClient,
-                            usesVoicePostProcessing: usesPostProcessing,
-                            sessionRouteChanged: onSessionRouteChanged
-                        )
-                    } catch {
-                        model.presentedError = error.localizedDescription
-                    }
-
-                case let .newChat(route):
-                    await model.configureNewChat(
-                        profiles: appModel.profiles,
-                        initialProfileID: route.profileID,
-                        initialProject: route.project,
-                        clientProvider: { profile in
-                            try await appModel.client(for: profile)
-                        },
+                do {
+                    let client = try await appModel.client(for: profile)
+                    reviewClient = client
+                    await model.configure(
+                        route: route,
+                        client: client,
                         voiceClient: voiceClient,
                         usesVoicePostProcessing: usesPostProcessing,
                         sessionRouteChanged: onSessionRouteChanged
                     )
+                } catch {
+                    model.presentedError = error.localizedDescription
                 }
-            }
-            .task(id: appModel.voiceConfigurationRevision) {
-                let voiceClient = try? await appModel.activeVoiceClient()
-                model.configureVoice(
-                    client: voiceClient,
-                    usesPostProcessing: appModel.activeVoiceProfile?.usesPostProcessing ?? false
+
+            case let .newChat(route):
+                await model.configureNewChat(
+                    profiles: appModel.profiles,
+                    initialProfileID: route.profileID,
+                    initialProject: route.project,
+                    clientProvider: { profile in
+                        try await appModel.client(for: profile)
+                    },
+                    voiceClient: voiceClient,
+                    usesVoicePostProcessing: usesPostProcessing,
+                    sessionRouteChanged: onSessionRouteChanged
                 )
             }
+        }
+        .task(id: appModel.voiceConfigurationRevision) {
+            let voiceClient = try? await appModel.activeVoiceClient()
+            model.configureVoice(
+                client: voiceClient,
+                usesPostProcessing: appModel.activeVoiceProfile?.usesPostProcessing ?? false
+            )
+        }
+        .task(id: model.route?.id) {
+            guard let route = model.route,
+                let profile = appModel.profile(withID: route.profileID)
+            else { return }
+            reviewClient = try? await appModel.client(for: profile)
+        }
+    }
+
+    private var serverName: String? {
+        if let selectedProfile = model.selectedProfile {
+            return selectedProfile.name
+        }
+        return appModel.profile(withID: model.route?.profileID ?? conversationRoute.profileID)?.name
     }
 }

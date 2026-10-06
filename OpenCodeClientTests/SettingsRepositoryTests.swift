@@ -94,6 +94,8 @@ struct SettingsRepositoryTests {
         try await repository.upsertVoiceProfile(voiceProfile, password: "voice-secret")
         await repository.setActiveVoiceProfile(profileID: voiceProfile.id)
         try await repository.saveSessionOrganization(.projectThenChronology)
+        let pinned = PinnedSessionReference(profileID: profile.id, sessionID: "ses_pinned")
+        try await repository.savePinnedSessions([pinned])
 
         let snapshot = await repository.snapshot()
         let password = try await repository.password(for: profile.id)
@@ -101,6 +103,7 @@ struct SettingsRepositoryTests {
         #expect(snapshot.activeProfile == profile)
         #expect(snapshot.activeVoiceProfile == voiceProfile)
         #expect(snapshot.sessionOrganization == .projectThenChronology)
+        #expect(snapshot.pinnedSessions == [pinned])
         #expect(password == "secret")
         #expect(voicePassword == "voice-secret")
 
@@ -127,6 +130,10 @@ struct SettingsRepositoryTests {
         try await repository.upsert(first, password: "first-secret")
         try await repository.upsert(second, password: nil)
         await repository.setActive(profileID: first.id)
+        try await repository.savePinnedSessions([
+            PinnedSessionReference(profileID: first.id, sessionID: "ses_first"),
+            PinnedSessionReference(profileID: second.id, sessionID: "ses_second"),
+        ])
 
         try await repository.delete(profileID: first.id)
 
@@ -134,6 +141,10 @@ struct SettingsRepositoryTests {
         let deletedPassword = try await repository.password(for: first.id)
         #expect(snapshot.profiles == [second])
         #expect(snapshot.activeProfileID == second.id)
+        #expect(
+            snapshot.pinnedSessions
+                == [PinnedSessionReference(profileID: second.id, sessionID: "ses_second")]
+        )
         #expect(deletedPassword == nil)
     }
 

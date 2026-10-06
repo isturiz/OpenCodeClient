@@ -9,6 +9,7 @@ final class AppModel {
     private(set) var voiceProfiles: [VoiceProfile] = []
     private(set) var activeVoiceProfileID: UUID?
     private(set) var sessionOrganization: SessionOrganization = .project
+    private(set) var pinnedSessions: Set<PinnedSessionReference> = []
     private(set) var serverConfigurationRevision = 0
     private(set) var voiceConfigurationRevision = 0
     private(set) var hasLoaded = false
@@ -41,6 +42,7 @@ final class AppModel {
         voiceProfiles = snapshot.voiceProfiles
         activeVoiceProfileID = snapshot.activeVoiceProfileID
         sessionOrganization = snapshot.sessionOrganization
+        pinnedSessions = snapshot.pinnedSessions
         hasLoaded = true
     }
 
@@ -108,6 +110,26 @@ final class AppModel {
         } catch {
             let snapshot = await dependencies.settings.snapshot()
             sessionOrganization = snapshot.sessionOrganization
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func isSessionPinned(profileID: UUID, sessionID: String) -> Bool {
+        pinnedSessions.contains(PinnedSessionReference(profileID: profileID, sessionID: sessionID))
+    }
+
+    func togglePinnedSession(profileID: UUID, sessionID: String) async {
+        let reference = PinnedSessionReference(profileID: profileID, sessionID: sessionID)
+        let previous = pinnedSessions
+        if pinnedSessions.contains(reference) {
+            pinnedSessions.remove(reference)
+        } else {
+            pinnedSessions.insert(reference)
+        }
+        do {
+            try await dependencies.settings.savePinnedSessions(pinnedSessions)
+        } catch {
+            pinnedSessions = previous
             presentedError = error.localizedDescription
         }
     }

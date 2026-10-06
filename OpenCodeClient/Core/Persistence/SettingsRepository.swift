@@ -11,6 +11,7 @@ protocol SettingsStoring: Sendable {
     func setActiveVoiceProfile(profileID: UUID?) async
     func voicePassword(for profileID: UUID) async throws -> String?
     func saveSessionOrganization(_ organization: SessionOrganization) async throws
+    func savePinnedSessions(_ references: Set<PinnedSessionReference>) async throws
 }
 
 enum SettingsStorageError: Error, Equatable, LocalizedError, Sendable {
@@ -35,6 +36,7 @@ actor SettingsRepository: SettingsStoring {
         static let voiceProfiles = "settings.voiceProfiles.v2"
         static let activeVoiceProfileID = "settings.activeVoiceProfileID.v2"
         static let sessionOrganization = "settings.sessionOrganization.v1"
+        static let pinnedSessions = "settings.pinnedSessions.v1"
     }
 
     private struct LegacyVoiceConfiguration: Decodable {
@@ -91,12 +93,14 @@ actor SettingsRepository: SettingsStoring {
         let activeID = profiles.contains(where: { $0.id == storedID }) ? storedID : profiles.first?.id
         let voiceState = await loadVoiceState()
         let organization = load(SessionOrganization.self, forKey: Keys.sessionOrganization) ?? .project
+        let pinnedSessions = load(Set<PinnedSessionReference>.self, forKey: Keys.pinnedSessions) ?? []
         return SettingsSnapshot(
             profiles: profiles,
             activeProfileID: activeID,
             voiceProfiles: voiceState.profiles,
             activeVoiceProfileID: voiceState.activeProfileID,
-            sessionOrganization: organization
+            sessionOrganization: organization,
+            pinnedSessions: pinnedSessions
         )
     }
 
@@ -141,10 +145,12 @@ actor SettingsRepository: SettingsStoring {
         defer { releaseTransaction() }
         var current = await makeSnapshot()
         current.profiles.removeAll { $0.id == profileID }
+        current.pinnedSessions = current.pinnedSessions.filter { $0.profileID != profileID }
         let previousPassword = try await credentials.password(for: profileID)
         try await credentials.removePassword(for: profileID)
         do {
             try save(current.profiles, forKey: Keys.profiles)
+            try save(current.pinnedSessions, forKey: Keys.pinnedSessions)
         } catch {
             try? await restoreServerPassword(previousPassword, profileID: profileID)
             throw error
@@ -271,6 +277,12 @@ actor SettingsRepository: SettingsStoring {
         await acquireTransaction()
         defer { releaseTransaction() }
         try save(organization, forKey: Keys.sessionOrganization)
+    }
+
+    func savePinnedSessions(_ references: Set<PinnedSessionReference>) async throws {
+        await acquireTransaction()
+        defer { releaseTransaction() }
+        try save(references, forKey: Keys.pinnedSessions)
     }
 
     private func loadVoiceState() async -> VoiceState {

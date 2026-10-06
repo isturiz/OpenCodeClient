@@ -36,6 +36,11 @@ private actor StubOpenCodeClient: OpenCodeClientProtocol {
     var messageValues: [ChatMessage]
     var modelValues: [ModelOption]
     var agentValues: [AgentOption]
+    var permissionValues: [PermissionRequest] = []
+    private var eventContinuation: AsyncThrowingStream<OpenCodeGlobalEvent, Error>.Continuation?
+    private(set) var messageReadCount = 0
+    private(set) var messageDirectories: [String] = []
+    private(set) var eventSubscriptions = 0
     var shouldRejectPrompt = false
     var createFailure: NetworkError?
     var promptFailure: NetworkError?
@@ -59,7 +64,7 @@ private actor StubOpenCodeClient: OpenCodeClientProtocol {
     }
 
     func health() -> OpenCodeHealth {
-        OpenCodeHealth(isHealthy: true, version: "1.18.3")
+        OpenCodeHealth(isHealthy: true, version: "2.0.0")
     }
 
     func projects() -> [OpenCodeProject] {
@@ -69,6 +74,27 @@ private actor StubOpenCodeClient: OpenCodeClientProtocol {
     func sessions(directory: String) -> [OpenCodeSession] {
         sessionValues[directory] ?? []
     }
+
+    func session(sessionID: String, directory: String) throws -> OpenCodeSession {
+        guard let value = sessionValues.values.flatMap({ $0 }).first(where: { $0.id == sessionID }) else {
+            throw StubClientError.rejected
+        }
+        return value
+    }
+
+    func permissions(sessionID: String, directory: String) -> [PermissionRequest] {
+        permissionValues
+    }
+
+    func setPermissions(_ permissions: [PermissionRequest]) { permissionValues = permissions }
+
+    func setStatuses(_ statuses: [String: [String: OpenCodeSessionStatus]]) { statusValues = statuses }
+
+    func emit(_ event: OpenCodeEvent) {
+        eventContinuation?.yield(OpenCodeGlobalEvent(directory: nil, event: event))
+    }
+
+    func finishEvents() { eventContinuation?.finish() }
 
     func sessionStatuses(directory: String) -> [String: OpenCodeSessionStatus] {
         statusValues[directory] ?? [:]
@@ -83,8 +109,39 @@ private actor StubOpenCodeClient: OpenCodeClientProtocol {
         return session
     }
 
+    func updateSessionTitle(
+        sessionID: String,
+        directory: String,
+        title: String
+    ) throws -> OpenCodeSession {
+        guard let session = sessionValues[directory]?.first(where: { $0.id == sessionID }) else {
+            throw StubClientError.rejected
+        }
+        return OpenCodeSession(
+            id: session.id,
+            projectID: session.projectID,
+            directory: session.directory,
+            parentID: session.parentID,
+            title: title,
+            version: session.version,
+            createdAt: session.createdAt,
+            updatedAt: session.updatedAt,
+            summary: session.summary
+        )
+    }
+
+    func sessionDiff(sessionID: String, directory: String) -> [OpenCodeFileDiff] { [] }
+
+    func files(directory: String, path: String) -> [OpenCodeFileNode] { [] }
+
+    func fileContent(directory: String, path: String) -> OpenCodeFileContent {
+        OpenCodeFileContent(type: .text, content: "")
+    }
+
     func messages(sessionID: String, directory: String, limit: Int?) -> [ChatMessage] {
-        messageValues
+        messageReadCount += 1
+        messageDirectories.append(directory)
+        return messageValues
     }
 
     func promptAsync(
@@ -122,7 +179,10 @@ private actor StubOpenCodeClient: OpenCodeClientProtocol {
     func reply(to permission: PermissionRequest, response: PermissionResponse, directory: String) {}
 
     func events() -> AsyncThrowingStream<OpenCodeGlobalEvent, Error> {
-        AsyncThrowingStream { _ in }
+        eventSubscriptions += 1
+        let (stream, continuation) = AsyncThrowingStream<OpenCodeGlobalEvent, Error>.makeStream()
+        eventContinuation = continuation
+        return stream
     }
 
     func rejectPrompts() {
@@ -166,6 +226,50 @@ struct FeatureModelTests {
         #expect(model.statuses[alphaSession.id] == .busy)
         model.searchText = "Zebra"
         #expect(model.filteredSections.map(\.project.id) == [zebra.id])
+    }
+
+    @Test @MainActor func projectsHideChildSessionsAndOrderPinnedRootsFirst() async {
+        let project = OpenCodeProject(id: "project", worktree: "/tmp/Project", vcs: "git")
+        let recent = makeSession(
+            id: "recent",
+            project: project,
+            title: "Recent",
+            updatedAt: Date(timeIntervalSince1970: 4)
+        )
+        let pinned = makeSession(
+            id: "pinned",
+            project: project,
+            title: "Pinned",
+            updatedAt: Date(timeIntervalSince1970: 2)
+        )
+        let child = makeSession(
+            id: "child",
+            project: project,
+            title: "Hidden subagent",
+            updatedAt: Date(timeIntervalSince1970: 5),
+            parentID: recent.id
+        )
+        let client = StubOpenCodeClient(
+            projects: [project],
+            sessions: [project.worktree: [child, recent, pinned]]
+        )
+        let profile = ServerProfile(name: "Test", baseURL: "https://example.com")
+        let model = ProjectsViewModel()
+        model.setPinnedSessions(
+            [PinnedSessionReference(profileID: profile.id, sessionID: pinned.id)],
+            profileID: profile.id
+        )
+
+        await model.connect(profile: profile, client: client)
+
+        #expect(model.filteredSections.first?.sessions.map(\.id) == [pinned.id, recent.id])
+        #expect(model.pinnedChronologyItems.map(\.session.id) == [pinned.id])
+        #expect(model.chronologySections.flatMap { $0.items }.map(\.session.id) == [recent.id])
+        #expect(model.projectChronologySections.first?.pinned.map(\.session.id) == [pinned.id])
+        model.searchText = child.title
+        #expect(model.filteredSections.isEmpty)
+        model.searchText = project.name
+        #expect(model.filteredSections.first?.sessions.map(\.id) == [pinned.id, recent.id])
     }
 
     @Test @MainActor func projectsOrganizeByRecentActivityBuckets() async throws {
@@ -248,6 +352,8 @@ struct FeatureModelTests {
             voiceClient: nil,
             usesVoicePostProcessing: false
         )
+        model.selectedModel = modelOption
+        model.selectedAgent = agent
         model.draft = "  Ship it  "
         await model.send()
         model.suspend()
@@ -384,6 +490,28 @@ struct FeatureModelTests {
         #expect(await secondClient.promptCalls.count == 1)
     }
 
+    @Test @MainActor func renamingChatUpdatesItsRoute() async {
+        let project = OpenCodeProject(id: "project", worktree: "/tmp/Project", vcs: "git")
+        let session = makeSession(id: "ses_1", project: project, title: "Original")
+        let client = StubOpenCodeClient(sessions: [project.worktree: [session]])
+        let model = ChatViewModel()
+        let route = SessionRoute(profileID: UUID(), project: project, session: session)
+        var reportedRoute: SessionRoute?
+
+        await model.configure(
+            route: route,
+            client: client,
+            voiceClient: nil,
+            usesVoicePostProcessing: false,
+            sessionRouteChanged: { reportedRoute = $0 }
+        )
+        await model.rename(to: "  Renamed  ")
+        model.suspend()
+
+        #expect(model.route?.session.title == "Renamed")
+        #expect(reportedRoute?.session.title == "Renamed")
+    }
+
     @Test @MainActor func ambiguousCreateFailurePreventsDuplicateRetry() async {
         let project = OpenCodeProject(id: "project", worktree: "/tmp/Project", vcs: "git")
         let profile = ServerProfile(name: "Test", baseURL: "https://example.com")
@@ -473,19 +601,106 @@ struct FeatureModelTests {
         #expect(await firstClient.createSessionCalls.isEmpty)
         #expect(await secondClient.createSessionCalls.count == 1)
     }
+
+    @Test @MainActor func resumesWithAuthoritativePermissionsAndStatus() async {
+        let project = OpenCodeProject(id: "project", worktree: "/tmp/Project", vcs: "git")
+        let session = makeSession(id: "ses_1", project: project, title: "Chat")
+        let client = StubOpenCodeClient(sessions: [project.worktree: [session]])
+        let model = ChatViewModel()
+        await model.configure(
+            route: SessionRoute(profileID: UUID(), project: project, session: session),
+            client: client, voiceClient: nil, usesVoicePostProcessing: false
+        )
+        model.suspend()
+        let permission = PermissionRequest(
+            id: "per_1", sessionID: session.id, messageID: "", type: "edit", title: "Edit",
+            patterns: ["*.swift"]
+        )
+        await client.setPermissions([permission])
+        await client.setStatuses([project.worktree: [session.id: .busy]])
+        await model.resume()
+        model.suspend()
+        #expect(model.permissions == [permission])
+        #expect(model.status == .busy)
+    }
+
+    @Test @MainActor func chatUsesSessionDirectoryInsteadOfProjectRoot() async {
+        let project = OpenCodeProject(id: "project", worktree: "/tmp/Project", vcs: "git")
+        let worktree = OpenCodeProject(id: "project", worktree: "/tmp/Worktree", vcs: "git")
+        let session = makeSession(id: "ses_1", project: worktree, title: "Chat")
+        let client = StubOpenCodeClient(sessions: [worktree.worktree: [session]])
+        let model = ChatViewModel()
+        await model.configure(
+            route: SessionRoute(profileID: UUID(), project: project, session: session),
+            client: client, voiceClient: nil, usesVoicePostProcessing: false
+        )
+        model.draft = "Use the worktree"
+        await model.send()
+        model.suspend()
+        #expect(await client.messageDirectories.allSatisfy { $0 == worktree.worktree })
+        #expect(await client.promptCalls.first?.directory == worktree.worktree)
+    }
+
+    @Test @MainActor func selectsSessionModelVariantAndAgentWithoutOverridingServerDefaults() async {
+        let project = OpenCodeProject(id: "project", worktree: "/tmp/Project", vcs: "git")
+        var session = makeSession(id: "ses_1", project: project, title: "Chat")
+        session.providerID = "provider"
+        session.modelID = "model"
+        session.variant = "high"
+        session.agentID = "plan"
+        let option = ModelOption(
+            providerID: "provider", modelID: "model", providerName: "Provider", name: "Model",
+            isConnected: true, variant: "high"
+        )
+        let agent = AgentOption(
+            name: "Plan", description: nil, mode: "primary", isBuiltIn: false, agentID: "plan")
+        let client = StubOpenCodeClient(
+            sessions: [project.worktree: [session]], models: [option], agents: [agent])
+        let model = ChatViewModel()
+        await model.configure(
+            route: SessionRoute(profileID: UUID(), project: project, session: session),
+            client: client, voiceClient: nil, usesVoicePostProcessing: false
+        )
+        model.suspend()
+        #expect(model.selectedModel == option)
+        #expect(model.selectedAgent == agent)
+    }
+
+    @Test @MainActor func continuousTimelineEventsDoNotStarveRefresh() async throws {
+        let project = OpenCodeProject(id: "project", worktree: "/tmp/Project", vcs: "git")
+        let session = makeSession(id: "ses_1", project: project, title: "Chat")
+        let client = StubOpenCodeClient(sessions: [project.worktree: [session]])
+        let model = ChatViewModel()
+        await model.configure(
+            route: SessionRoute(profileID: UUID(), project: project, session: session),
+            client: client, voiceClient: nil, usesVoicePostProcessing: false
+        )
+        defer { model.suspend() }
+        for _ in 0..<100 {
+            if await client.eventSubscriptions > 0 { break }
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let initialReads = await client.messageReadCount
+        for _ in 0..<20 {
+            await client.emit(.messageChanged(sessionID: session.id))
+            try await Task.sleep(for: .milliseconds(25))
+        }
+        #expect(await client.messageReadCount > initialReads)
+    }
 }
 
 private func makeSession(
     id: String,
     project: OpenCodeProject,
     title: String,
-    updatedAt: Date = Date(timeIntervalSince1970: 2)
+    updatedAt: Date = Date(timeIntervalSince1970: 2),
+    parentID: String? = nil
 ) -> OpenCodeSession {
     OpenCodeSession(
         id: id,
         projectID: project.id,
         directory: project.worktree,
-        parentID: nil,
+        parentID: parentID,
         title: title,
         version: "1.18.3",
         createdAt: Date(timeIntervalSince1970: 1),

@@ -81,6 +81,10 @@
         func saveSessionOrganization(_ organization: SessionOrganization) {
             value.sessionOrganization = organization
         }
+
+        func savePinnedSessions(_ references: Set<PinnedSessionReference>) {
+            value.pinnedSessions = references
+        }
     }
 
     private actor FixtureOpenCodeClient: OpenCodeClientProtocol {
@@ -89,7 +93,7 @@
             worktree: "/Users/demo/Projects/OpenCodeClient",
             vcs: "git"
         )
-        private let session = OpenCodeSession(
+        private var session = OpenCodeSession(
             id: "fixture-session",
             projectID: "fixture-project",
             directory: "/Users/demo/Projects/OpenCodeClient",
@@ -100,15 +104,116 @@
             updatedAt: .now,
             summary: .init(additions: 142, deletions: 18, files: 8)
         )
+        private let childSession = OpenCodeSession(
+            id: "fixture-child-session",
+            projectID: "fixture-project",
+            directory: "/Users/demo/Projects/OpenCodeClient",
+            parentID: "fixture-session",
+            title: "Hidden fixture subagent",
+            version: "1.18.3",
+            createdAt: .now.addingTimeInterval(-1_800),
+            updatedAt: .now.addingTimeInterval(-10),
+            summary: nil
+        )
 
-        func health() -> OpenCodeHealth { OpenCodeHealth(isHealthy: true, version: "1.18.3") }
+        func health() -> OpenCodeHealth { OpenCodeHealth(isHealthy: true, version: "2.0.0") }
         func projects() -> [OpenCodeProject] { [project] }
-        func sessions(directory: String) -> [OpenCodeSession] { [session] }
+        func sessions(directory: String) -> [OpenCodeSession] { [session, childSession] }
+        func session(sessionID: String, directory: String) -> OpenCodeSession { session }
         func sessionStatuses(directory: String) -> [String: OpenCodeSessionStatus] { [session.id: .idle] }
         func createSession(directory: String, title: String?) -> OpenCodeSession { session }
 
-        func messages(sessionID: String, directory: String, limit: Int?) -> [ChatMessage] {
+        func updateSessionTitle(
+            sessionID: String,
+            directory: String,
+            title: String
+        ) -> OpenCodeSession {
+            session = OpenCodeSession(
+                id: session.id,
+                projectID: session.projectID,
+                directory: session.directory,
+                parentID: session.parentID,
+                title: title,
+                version: session.version,
+                createdAt: session.createdAt,
+                updatedAt: .now,
+                summary: session.summary
+            )
+            return session
+        }
+
+        func sessionDiff(sessionID: String, directory: String) -> [OpenCodeFileDiff] {
             [
+                OpenCodeFileDiff(
+                    path: "OpenCodeClient/App/AppShellView.swift",
+                    status: .modified,
+                    additions: 24,
+                    deletions: 6,
+                    patch: "@@ -1,2 +1,2 @@\n-import SwiftUI\n+import SwiftUI",
+                    before: nil,
+                    after: nil
+                )
+            ]
+        }
+
+        func files(directory: String, path: String) -> [OpenCodeFileNode] {
+            if path.isEmpty {
+                return [
+                    OpenCodeFileNode(
+                        name: "OpenCodeClient",
+                        path: "OpenCodeClient",
+                        absolutePath: nil,
+                        type: .directory,
+                        isIgnored: false
+                    ),
+                    OpenCodeFileNode(
+                        name: "README.md",
+                        path: "README.md",
+                        absolutePath: nil,
+                        type: .file,
+                        isIgnored: false
+                    ),
+                ]
+            }
+            return [
+                OpenCodeFileNode(
+                    name: "OpenCodeClientApp.swift",
+                    path: "OpenCodeClient/OpenCodeClientApp.swift",
+                    absolutePath: nil,
+                    type: .file,
+                    isIgnored: false
+                )
+            ]
+        }
+
+        func fileContent(directory: String, path: String) -> OpenCodeFileContent {
+            OpenCodeFileContent(type: .text, content: "# OpenCode Client\n\nNative iOS companion.")
+        }
+
+        func messages(sessionID: String, directory: String, limit: Int?) -> [ChatMessage] {
+            let earlierMessages = (0..<12).map { index in
+                let role: ChatRole = index.isMultiple(of: 2) ? .user : .assistant
+                let text =
+                    "History message \(index). This fixture content is deliberately long enough to require transcript scrolling."
+                return ChatMessage(
+                    id: "fixture-history-\(index)",
+                    sessionID: session.id,
+                    role: role,
+                    createdAt: .now.addingTimeInterval(Double(-900 + index * 30)),
+                    completedAt: .now.addingTimeInterval(Double(-895 + index * 30)),
+                    providerID: "openai",
+                    modelID: "gpt-5.6-sol",
+                    errorMessage: nil,
+                    parts: [
+                        .text(
+                            id: "fixture-history-text-\(index)",
+                            text: text,
+                            synthetic: false
+                        )
+                    ]
+                )
+            }
+            return earlierMessages + [
                 ChatMessage(
                     id: "fixture-user-message",
                     sessionID: session.id,

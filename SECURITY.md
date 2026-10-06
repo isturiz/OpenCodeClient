@@ -16,8 +16,10 @@ real credentials, recordings, prompts, or private source code.
 - The app does not disable certificate validation.
 - Public HTTP endpoints are rejected; local HTTP is allowed with a visible warning.
 - Basic Auth over HTTP is not confidential and should only be used on a trusted LAN.
-- FluidVoice's local API has no application-level authentication and must remain loopback-only behind
-  an authenticated tunnel such as Tailscale Serve or an HTTPS reverse proxy such as Caddy. The app can
-  send optional HTTP Basic credentials to that proxy.
+- FluidVoice's local API has no application-level authentication and rejects non-loopback clients.
+  Tailscale Serve connects to its loopback endpoint; restrict remote access with tailnet grants/ACLs.
+  Serve does not add an application password, and Funnel must not be enabled for this API.
+- OpenCode's own authentication remains enabled even behind Tailscale. Neither the app nor its setup
+  requires Caddy, local CA certificates, or a fixed OpenCode patch release.
 
 Only the latest release receives security fixes during early development.

@@ -55,6 +55,7 @@ struct FluidVoiceClientTests {
         #expect(upload.url?.path() == "/v1/transcribe")
         #expect(upload.header("Content-Type") == "audio/wav")
         #expect(upload.header("X-Filename") == "dictation.wav")
+        #expect(upload.header("Content-Length") == "128")
         #expect(
             recorder.requests.allSatisfy {
                 $0.header("Authorization") == "Basic dm9pY2U6c2VjcmV0"
@@ -140,6 +141,25 @@ struct FluidVoiceClientTests {
 
         _ = try await client.health()
 
+        #expect(recorder.requests.first?.header("Authorization") == nil)
+    }
+
+    @Test func supportsTailscaleHTTPSPortAndProxyPathWithoutCredentials() async throws {
+        let host = "fluidvoice-tailscale.example.ts.net"
+        let recorder = RequestRecorder()
+        MockURLProtocol.register(host: host) { request in
+            recorder.append(request)
+            return (try makeHTTPResponse(for: request), Data(#"{"status":"ok","version":"future"}"#.utf8))
+        }
+        defer { MockURLProtocol.unregister(host: host) }
+        let client = try LiveFluidVoiceClient(
+            configuration: FluidVoiceClientConfiguration(
+                baseURL: "https://\(host):9443/voice", username: "", password: nil
+            ), session: makeMockSession()
+        )
+        #expect(try await client.health().isHealthy)
+        #expect(recorder.requests.first?.url?.port == 9443)
+        #expect(recorder.requests.first?.url?.path() == "/voice/v1/health")
         #expect(recorder.requests.first?.header("Authorization") == nil)
     }
 }

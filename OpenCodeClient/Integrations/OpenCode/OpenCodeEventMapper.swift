@@ -2,92 +2,69 @@ import Foundation
 
 enum OpenCodeEventMapper {
     static func domain(from envelope: EventEnvelopeDTO) -> OpenCodeGlobalEvent {
-        let properties = envelope.payload.properties
+        let data = envelope.data
+        let sessionID = data?["sessionID"]?.stringValue
         let event: OpenCodeEvent
 
-        switch envelope.payload.type {
+        switch envelope.type {
         case "server.connected":
             event = .connected
-        case "session.created":
-            event = sessionEvent({ .sessionCreated($0) }, properties: properties)
-        case "session.updated":
-            event = sessionEvent({ .sessionUpdated($0) }, properties: properties)
-        case "session.deleted":
-            event = sessionEvent({ .sessionDeleted($0) }, properties: properties)
         case "session.status":
-            if let sessionID = properties["sessionID"]?.stringValue,
-                let status = decode(SessionStatusDTO.self, from: properties["status"])
-            {
+            if let sessionID, let status = decode(SessionStatusDTO.self, from: data?["status"]) {
                 event = .sessionStatus(sessionID: sessionID, status: status.domain())
             } else {
-                event = .unknown(envelope.payload.type)
+                event = .unknown(envelope.type)
             }
-        case "session.idle":
-            if let sessionID = properties["sessionID"]?.stringValue {
-                event = .sessionIdle(sessionID: sessionID)
-            } else {
-                event = .unknown(envelope.payload.type)
-            }
-        case "message.updated":
-            if let info = decode(MessageDTO.self, from: properties["info"]) {
-                event = .messageChanged(sessionID: info.sessionID)
-            } else {
-                event = .unknown(envelope.payload.type)
-            }
-        case "message.part.updated":
-            if let part = decode(PartDTO.self, from: properties["part"]) {
-                event = .partUpdated(
-                    sessionID: part.sessionID,
-                    messageID: part.messageID,
-                    part: part.domain(),
-                    delta: properties["delta"]?.stringValue
+        case "session.execution.started":
+            event = sessionID.map { .sessionStatus(sessionID: $0, status: .busy) } ?? .unknown(envelope.type)
+        case "session.retry.scheduled":
+            if let sessionID {
+                event = .sessionStatus(
+                    sessionID: sessionID,
+                    status: .retry(
+                        attempt: Int(exactly: data?["attempt"]?.doubleValue ?? 0) ?? 0,
+                        message: data?["error"]?["message"]?.stringValue ?? "",
+                        next: data?["at"]?.doubleValue.map(SessionDTO.date(from:))
+                    )
                 )
             } else {
-                event = .unknown(envelope.payload.type)
+                event = .unknown(envelope.type)
             }
-        case "message.part.removed":
-            if let sessionID = properties["sessionID"]?.stringValue,
-                let messageID = properties["messageID"]?.stringValue,
-                let partID = properties["partID"]?.stringValue
-            {
-                event = .partRemoved(sessionID: sessionID, messageID: messageID, partID: partID)
-            } else {
-                event = .unknown(envelope.payload.type)
-            }
-        case "permission.updated":
-            if let permission = decode(PermissionDTO.self, from: properties) {
-                event = .permissionUpdated(permission.domain())
-            } else {
-                event = .unknown(envelope.payload.type)
-            }
+        case "session.idle", "session.execution.succeeded", "session.execution.interrupted":
+            event = sessionID.map { .sessionIdle(sessionID: $0) } ?? .unknown(envelope.type)
+        case "session.execution.failed":
+            event = .sessionError(sessionID: sessionID, message: data?["error"]?["message"]?.stringValue)
+        case "session.deleted":
+            event = sessionID.map { .sessionRemoved(sessionID: $0) } ?? .unknown(envelope.type)
+        case "session.created", "session.renamed", "session.moved", "session.agent.selected",
+            "session.model.selected":
+            event = sessionID.map { .sessionChanged(sessionID: $0) } ?? .unknown(envelope.type)
+        case "permission.asked":
+            event =
+                decode(PermissionDTO.self, from: data).map { .permissionUpdated($0.domain()) }
+                ?? .unknown(envelope.type)
         case "permission.replied":
-            if let sessionID = properties["sessionID"]?.stringValue,
-                let permissionID = properties["permissionID"]?.stringValue
-            {
-                event = .permissionReplied(sessionID: sessionID, permissionID: permissionID)
+            if let sessionID, let requestID = data?["requestID"]?.stringValue {
+                event = .permissionReplied(sessionID: sessionID, permissionID: requestID)
             } else {
-                event = .unknown(envelope.payload.type)
+                event = .unknown(envelope.type)
             }
-        case "session.error":
-            let message =
-                properties["error"]?["data"]?["message"]?.stringValue
-                ?? properties["error"]?["message"]?.stringValue
-            event = .sessionError(sessionID: properties["sessionID"]?.stringValue, message: message)
         default:
-            event = .unknown(envelope.payload.type)
+            // The V2 timeline is a projection, not V1 message-part patches. Coalesced
+            // reads keep partial text and tool state authoritative without guessing ordinals.
+            let timelinePrefixes = [
+                "session.text.", "session.reasoning.", "session.tool.", "session.step.",
+                "session.inbox.", "session.compaction.", "session.retry.", "session.revert.",
+                "session.shell.", "session.skill.", "session.synthetic", "session.forked",
+            ]
+            if let sessionID, timelinePrefixes.contains(where: { envelope.type.hasPrefix($0) }) {
+                event = .messageChanged(sessionID: sessionID)
+            } else {
+                event = .unknown(envelope.type)
+            }
         }
 
-        return OpenCodeGlobalEvent(directory: envelope.directory, event: event)
-    }
-
-    private static func sessionEvent(
-        _ constructor: (OpenCodeSession) -> OpenCodeEvent,
-        properties: JSONValue
-    ) -> OpenCodeEvent {
-        guard let session = decode(SessionDTO.self, from: properties["info"]) else {
-            return .unknown("session")
-        }
-        return constructor(session.domain())
+        return OpenCodeGlobalEvent(directory: envelope.location?.directory, event: event)
     }
 
     private static func decode<Value: Decodable>(_ type: Value.Type, from value: JSONValue?) -> Value? {

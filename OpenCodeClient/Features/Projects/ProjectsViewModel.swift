@@ -16,6 +16,7 @@ final class ProjectsViewModel {
     private(set) var sections: [ProjectSection] = []
     private(set) var statuses: [String: OpenCodeSessionStatus] = [:]
     private(set) var chronologyReferenceDate: Date
+    private(set) var pinnedSessionIDs: Set<String> = []
     var searchText = ""
     var organization: SessionOrganization = .project
 
@@ -36,9 +37,15 @@ final class ProjectsViewModel {
 
     var filteredSections: [ProjectSection] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !query.isEmpty else { return sections }
+        let roots = sections.map { section in
+            ProjectSection(
+                project: section.project,
+                sessions: section.sessions.filter { $0.parentID == nil }.sorted(by: sessionDisplayOrder)
+            )
+        }
+        guard !query.isEmpty else { return roots }
 
-        return sections.compactMap { section in
+        return roots.compactMap { section in
             let projectMatches =
                 section.project.name.localizedStandardContains(query)
                 || section.project.worktree.localizedStandardContains(query)
@@ -54,22 +61,52 @@ final class ProjectsViewModel {
     var chronologySections: [SessionChronologySection] {
         chronologySections(
             for: filteredSections.flatMap { section in
-                section.sessions.map { SessionListItem(project: section.project, session: $0) }
+                section.sessions.compactMap { session in
+                    guard !pinnedSessionIDs.contains(session.id) else { return nil }
+                    return SessionListItem(project: section.project, session: session)
+                }
             }
         )
     }
 
+    var pinnedChronologyItems: [SessionListItem] {
+        filteredSections
+            .flatMap { section in
+                section.sessions.compactMap { session in
+                    guard pinnedSessionIDs.contains(session.id) else { return nil }
+                    return SessionListItem(project: section.project, session: session)
+                }
+            }
+            .sorted(by: Self.sessionListOrder)
+    }
+
     var projectChronologySections: [ProjectChronologySection] {
         filteredSections.map { section in
-            ProjectChronologySection(
+            let pinned: [SessionListItem] = section.sessions.compactMap { session in
+                guard pinnedSessionIDs.contains(session.id) else { return nil }
+                return SessionListItem(project: section.project, session: session)
+            }
+            return ProjectChronologySection(
                 project: section.project,
+                pinned: pinned,
                 chronology: chronologySections(
-                    for: section.sessions.map {
-                        SessionListItem(project: section.project, session: $0)
+                    for: section.sessions.compactMap { session in
+                        guard !pinnedSessionIDs.contains(session.id) else { return nil }
+                        return SessionListItem(project: section.project, session: session)
                     }
                 )
             )
         }
+    }
+
+    func setPinnedSessions(_ references: Set<PinnedSessionReference>, profileID: UUID?) {
+        pinnedSessionIDs = Set(
+            references.lazy.filter { $0.profileID == profileID }.map(\.sessionID)
+        )
+    }
+
+    func isPinned(_ sessionID: String) -> Bool {
+        pinnedSessionIDs.contains(sessionID)
     }
 
     func prepareForConnection(to profile: ServerProfile) {
@@ -231,6 +268,13 @@ final class ProjectsViewModel {
             return titleOrder == .orderedAscending
         }
         return lhs.id < rhs.id
+    }
+
+    private func sessionDisplayOrder(_ lhs: OpenCodeSession, _ rhs: OpenCodeSession) -> Bool {
+        let lhsPinned = pinnedSessionIDs.contains(lhs.id)
+        let rhsPinned = pinnedSessionIDs.contains(rhs.id)
+        if lhsPinned != rhsPinned { return lhsPinned }
+        return Self.sessionOrder(lhs, rhs)
     }
 
     private static func sessionListOrder(_ lhs: SessionListItem, _ rhs: SessionListItem) -> Bool {

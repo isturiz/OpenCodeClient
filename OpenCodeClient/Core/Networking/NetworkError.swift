@@ -6,6 +6,7 @@ enum NetworkError: Error, Equatable, LocalizedError, Sendable {
     case invalidResponse
     case httpStatus(Int, String?)
     case decoding
+    case unsupportedServerVersion
     case timedOut
     case cancelled
     case unreachable(String)
@@ -26,6 +27,8 @@ enum NetworkError: Error, Equatable, LocalizedError, Sendable {
             }
         case .decoding:
             String(localized: "The server returned data that could not be read.")
+        case .unsupportedServerVersion:
+            String(localized: "This app requires OpenCode V2. Update the server before connecting.")
         case .timedOut:
             String(localized: "The request timed out. Check the server and your network connection.")
         case .cancelled:

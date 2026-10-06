@@ -109,25 +109,33 @@ enum SessionOrganization: String, Codable, Equatable, Sendable {
     }
 }
 
+struct PinnedSessionReference: Codable, Equatable, Hashable, Sendable {
+    let profileID: UUID
+    let sessionID: String
+}
+
 struct SettingsSnapshot: Equatable, Sendable {
     var profiles: [ServerProfile]
     var activeProfileID: UUID?
     var voiceProfiles: [VoiceProfile]
     var activeVoiceProfileID: UUID?
     var sessionOrganization: SessionOrganization
+    var pinnedSessions: Set<PinnedSessionReference>
 
     init(
         profiles: [ServerProfile],
         activeProfileID: UUID?,
         voiceProfiles: [VoiceProfile] = [],
         activeVoiceProfileID: UUID? = nil,
-        sessionOrganization: SessionOrganization = .project
+        sessionOrganization: SessionOrganization = .project,
+        pinnedSessions: Set<PinnedSessionReference> = []
     ) {
         self.profiles = profiles
         self.activeProfileID = activeProfileID
         self.voiceProfiles = voiceProfiles
         self.activeVoiceProfileID = activeVoiceProfileID
         self.sessionOrganization = sessionOrganization
+        self.pinnedSessions = pinnedSessions
     }
 
     var activeProfile: ServerProfile? {

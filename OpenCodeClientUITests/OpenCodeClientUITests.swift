@@ -22,6 +22,7 @@ final class OpenCodeClientUITests: XCTestCase {
 
         let session = app.buttons["session-fixture-session"]
         XCTAssertTrue(session.waitForExistence(timeout: 5))
+        XCTAssertFalse(app.buttons["session-fixture-child-session"].exists)
         session.tap()
 
         let composer = app.descendants(matching: .any)["chat-composer"]
@@ -30,26 +31,11 @@ final class OpenCodeClientUITests: XCTestCase {
         ]
         XCTAssertTrue(composer.waitForExistence(timeout: 5))
         XCTAssertTrue(assistantMessage.waitForExistence(timeout: 5))
-
-        let settings = app.buttons["Settings"].firstMatch
-        XCTAssertTrue(settings.waitForExistence(timeout: 5))
-        settings.tap()
-
-        let editServer = app.buttons["Edit Studio Mac"]
-        XCTAssertTrue(editServer.waitForExistence(timeout: 5))
-        editServer.tap()
-        XCTAssertEqual(app.textFields["server-name"].value as? String, "Studio Mac")
-        XCTAssertEqual(app.textFields["server-url"].value as? String, "https://fixture.example.com")
-        XCTAssertEqual(app.textFields["server-username"].value as? String, "opencode")
-        app.buttons["Cancel"].tap()
-
-        let addVoice = app.buttons["Add Voice Server"]
-        XCTAssertTrue(addVoice.waitForExistence(timeout: 5))
-        addVoice.tap()
-        XCTAssertTrue(
-            app.descendants(matching: .any)["fluidvoice-username"].waitForExistence(timeout: 5)
-        )
-        XCTAssertTrue(app.descendants(matching: .any)["fluidvoice-password"].exists)
+        let finalHeading = app.staticTexts["Foundation complete"]
+        XCTAssertTrue(finalHeading.waitForExistence(timeout: 5))
+        XCTAssertTrue(finalHeading.isHittable)
+        XCTAssertTrue(app.staticTexts["Studio Mac"].exists)
+        XCTAssertTrue(app.buttons["chat-new-chat"].exists)
     }
 
     @MainActor
@@ -70,7 +56,7 @@ final class OpenCodeClientUITests: XCTestCase {
         XCTAssertFalse(app.buttons["chat-send"].isEnabled)
 
         projectSelector.tap()
-        let project = app.buttons["OpenCodeClient — /Users/demo/Projects/OpenCodeClient"]
+        let project = app.buttons["OpenCodeClient"]
         XCTAssertTrue(project.waitForExistence(timeout: 5))
         project.tap()
 
@@ -83,6 +69,66 @@ final class OpenCodeClientUITests: XCTestCase {
 
         XCTAssertTrue(app.staticTexts["Draft first prompt"].waitForExistence(timeout: 5))
         XCTAssertFalse(app.buttons["new-chat-project"].exists)
+    }
+
+    @MainActor
+    func testProjectDisclosureCollapsesAndRestoresSessions() {
+        let app = XCUIApplication()
+        app.launchArguments = ["UITEST_WORKSPACE"]
+        app.launch()
+
+        let disclosure = app.buttons["project-disclosure-fixture-project"]
+        let session = app.buttons["session-fixture-session"]
+        XCTAssertTrue(disclosure.waitForExistence(timeout: 5))
+        XCTAssertTrue(session.exists)
+        disclosure.tap()
+        XCTAssertFalse(session.exists)
+        disclosure.tap()
+        XCTAssertTrue(session.waitForExistence(timeout: 2))
+    }
+
+    @MainActor
+    func testChatCanJumpToLatestAndOpenReviewScreens() {
+        let app = XCUIApplication()
+        app.launchArguments = ["UITEST_WORKSPACE"]
+        app.launch()
+        app.buttons["session-fixture-session"].tap()
+
+        let transcript = app.scrollViews["chat-transcript"]
+        XCTAssertTrue(transcript.waitForExistence(timeout: 5))
+        transcript.swipeDown()
+        let jump = app.buttons["jump-to-latest"]
+        XCTAssertTrue(jump.waitForExistence(timeout: 3))
+        jump.tap()
+        XCTAssertTrue(app.staticTexts["Foundation complete"].isHittable)
+
+        let menu = app.buttons["Conversation Options"]
+        menu.tap()
+        XCTAssertTrue(app.buttons["Pin"].exists)
+        XCTAssertTrue(app.buttons["Rename"].exists)
+        XCTAssertTrue(app.buttons["Changes"].exists)
+        XCTAssertTrue(app.buttons["Files"].exists)
+        app.buttons["Changes"].tap()
+        XCTAssertTrue(app.staticTexts["OpenCodeClient/App/AppShellView.swift"].waitForExistence(timeout: 5))
+        app.navigationBars.buttons.firstMatch.tap()
+
+        menu.tap()
+        app.buttons["Files"].tap()
+        XCTAssertTrue(app.staticTexts["README.md"].waitForExistence(timeout: 5))
+        XCTAssertTrue(app.staticTexts["OpenCodeClient"].exists)
+    }
+
+    @MainActor
+    func testChatNewButtonPreservesServerAndProject() {
+        let app = XCUIApplication()
+        app.launchArguments = ["UITEST_WORKSPACE"]
+        app.launch()
+        app.buttons["session-fixture-session"].tap()
+        XCTAssertTrue(app.buttons["chat-new-chat"].waitForExistence(timeout: 5))
+        app.buttons["chat-new-chat"].tap()
+
+        XCTAssertEqual(app.buttons["new-chat-server"].value as? String, "Studio Mac")
+        XCTAssertEqual(app.buttons["new-chat-project"].value as? String, "OpenCodeClient")
     }
 
     @MainActor

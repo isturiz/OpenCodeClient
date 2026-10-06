@@ -24,21 +24,23 @@ The project is in active early development. The first milestone provides a compl
 
 - Xcode 26.6 or newer
 - iOS or iPadOS 26.0 or newer
-- A reachable OpenCode server
-- FluidVoice 1.6.4 or newer for optional voice transcription
+- A reachable server with the OpenCode V2 API (no fixed patch-release requirement)
+- FluidVoice with its local HTTP API enabled for optional voice transcription
 
 ## Run OpenCode
 
-OpenCode binds to loopback by default. To reach it from an iPhone or iPad on your trusted network,
-start it on an address reachable by the device and protect it with a password:
+Use Tailscale on the Mac and iPhone or iPad. Keep OpenCode on loopback and expose it privately through
+Tailscale Serve, not Funnel. For an existing background service:
 
 ```bash
-OPENCODE_SERVER_PASSWORD='replace-me' \
-  opencode serve --hostname 0.0.0.0 --port 4096
+opencode service status
+tailscale serve --bg --https=443 "$(opencode service status)"
 ```
 
-Then add `http://<mac-address>:4096` in OpenCode Client. Basic Auth over plain HTTP is only suitable
-for a trusted local network. Prefer an HTTPS reverse proxy or Tailscale for remote access.
+Add the generated HTTPS base URL in OpenCode Client, without `/api`. Use the service's credentials
+with username `opencode`; inspect the password locally with `opencode service get password`, never
+share it or place it in source files. Existing Serve targets must be inspected before applying changes.
+See [Setup](docs/SETUP.md) for separate native, Docker, and voice endpoints.
 
 ## Configure FluidVoice
 
@@ -50,16 +52,16 @@ defaults write com.FluidApp.app LocalAPIPort -int 47733
 ```
 
 FluidVoice intentionally accepts loopback clients only. A physical iPhone cannot connect directly to
-port `47733`. The recommended setup is an authenticated Tailscale Serve proxy:
+port `47733`. Tailscale Serve connects to it locally and protects remote access through your tailnet:
 
 ```bash
-tailscale serve --bg http://127.0.0.1:47733
+tailscale serve --bg --https=9443 http://127.0.0.1:47733
 ```
 
-Enter the generated HTTPS URL in Settings → Voice. Do not expose FluidVoice's unauthenticated local
-port directly to a LAN or the public internet. If an HTTPS reverse proxy such as Caddy protects the
-endpoint with Basic Auth, enter its username and password in the same Voice settings. The password is
-stored in Keychain.
+Enter the generated HTTPS URL, including `:9443`, in Settings → Voice. Leave username and password
+empty for direct Tailscale Serve access. Restrict access with tailnet rules and do not enable Funnel.
+This setup does not need Caddy or its local certificates. Choose an unused HTTPS port rather than
+overwriting another Serve target.
 
 ## Build
 

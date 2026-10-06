@@ -25,6 +25,7 @@ final class ChatViewModel {
     private(set) var isLoadingProjects = false
     private(set) var isCreatingSession = false
     private(set) var isSending = false
+    private(set) var isRenaming = false
     private(set) var isTranscribing = false
     private(set) var eventsConnected = false
     private(set) var submissionOutcomeUncertain = false
@@ -45,6 +46,8 @@ final class ChatViewModel {
     @ObservationIgnored private var sessionRouteChanged: ((SessionRoute) -> Void)?
     @ObservationIgnored private var eventTask: Task<Void, Never>?
     @ObservationIgnored private var messageRefreshTask: Task<Void, Never>?
+    @ObservationIgnored private var needsMessageRefresh = false
+    @ObservationIgnored private var sessionRefreshTask: Task<Void, Never>?
     @ObservationIgnored private var transcriptionTask: Task<Void, Never>?
     @ObservationIgnored private var generation = UUID()
     @ObservationIgnored private var targetGeneration = UUID()
@@ -205,16 +208,24 @@ final class ChatViewModel {
         do {
             async let messagesRequest = client.messages(
                 sessionID: route.session.id,
-                directory: route.project.worktree,
+                directory: route.session.directory,
                 limit: 200
             )
-            async let statusesRequest = client.sessionStatuses(directory: route.project.worktree)
-            let (messages, statuses) = try await (messagesRequest, statusesRequest)
+            async let statusesRequest = client.sessionStatuses(directory: route.session.directory)
+            async let permissionsRequest = client.permissions(
+                sessionID: route.session.id, directory: route.session.directory
+            )
+            let (messages, statuses, permissions) = try await (
+                messagesRequest, statusesRequest, permissionsRequest
+            )
             guard generation == requestedGeneration else { return }
             self.messages = messages
+            self.permissions = permissions
             status = statuses[route.session.id] ?? .idle
             phase = .loaded
 
+            await refreshSession()
+            guard generation == requestedGeneration else { return }
             await loadOptions(for: route.project, expectedGeneration: requestedGeneration)
         } catch is CancellationError {
             return
@@ -228,12 +239,14 @@ final class ChatViewModel {
 
     func refreshMessages() async {
         guard let route, let client else { return }
+        let requestedGeneration = generation
         do {
             let loaded = try await client.messages(
                 sessionID: route.session.id,
-                directory: route.project.worktree,
+                directory: route.session.directory,
                 limit: 200
             )
+            guard generation == requestedGeneration, !Task.isCancelled else { return }
             let pending = messages.filter { $0.id.hasPrefix("temporary-user-") }
             let loadedTexts = Set(
                 loaded.filter { $0.role == .user }.compactMap { message in
@@ -248,6 +261,7 @@ final class ChatViewModel {
                     return !loadedTexts.contains(text)
                 }
         } catch {
+            guard generation == requestedGeneration, !Task.isCancelled else { return }
             presentedError = error.localizedDescription
         }
     }
@@ -331,7 +345,7 @@ final class ChatViewModel {
         do {
             try await client.promptAsync(
                 sessionID: destinationRoute.session.id,
-                directory: destinationRoute.project.worktree,
+                directory: destinationRoute.session.directory,
                 text: text,
                 model: submittedModel,
                 agent: submittedAgent
@@ -368,9 +382,33 @@ final class ChatViewModel {
     func abort() async {
         guard let route, let client else { return }
         do {
-            try await client.abort(sessionID: route.session.id, directory: route.project.worktree)
+            try await client.abort(sessionID: route.session.id, directory: route.session.directory)
             status = .idle
             await refreshMessages()
+        } catch {
+            presentedError = error.localizedDescription
+        }
+    }
+
+    func rename(to title: String) async {
+        guard let route, let client, !isRenaming else { return }
+        let title = title.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !title.isEmpty, title != route.session.title else { return }
+        isRenaming = true
+        defer { isRenaming = false }
+        do {
+            let session = try await client.updateSessionTitle(
+                sessionID: route.session.id,
+                directory: route.session.directory,
+                title: title
+            )
+            let updatedRoute = SessionRoute(
+                profileID: route.profileID,
+                project: route.project,
+                session: session
+            )
+            self.route = updatedRoute
+            sessionRouteChanged?(updatedRoute)
         } catch {
             presentedError = error.localizedDescription
         }
@@ -379,7 +417,7 @@ final class ChatViewModel {
     func respond(to permission: PermissionRequest, with response: PermissionResponse) async {
         guard let route, let client else { return }
         do {
-            try await client.reply(to: permission, response: response, directory: route.project.worktree)
+            try await client.reply(to: permission, response: response, directory: route.session.directory)
             permissions.removeAll { $0.id == permission.id }
         } catch {
             presentedError = error.localizedDescription
@@ -423,12 +461,17 @@ final class ChatViewModel {
         eventTask?.cancel()
         eventTask = nil
         eventsConnected = false
+        messageRefreshTask?.cancel()
+        messageRefreshTask = nil
+        needsMessageRefresh = false
+        sessionRefreshTask?.cancel()
+        sessionRefreshTask = nil
         cancelVoiceWork()
     }
 
     func resume() async {
         guard route != nil else { return }
-        await refreshMessages()
+        await synchronizeConversation()
         startEvents()
     }
 
@@ -499,8 +542,9 @@ final class ChatViewModel {
         selectedModel = nil
         selectedAgent = nil
 
-        async let modelRequest = try? client.models(directory: project.worktree)
-        async let agentRequest = try? client.agents(directory: project.worktree)
+        let directory = route?.session.directory ?? project.worktree
+        async let modelRequest = try? client.models(directory: directory)
+        async let agentRequest = try? client.agents(directory: directory)
         let (models, agents) = await (modelRequest ?? [], agentRequest ?? [])
         if let expectedGeneration {
             guard generation == expectedGeneration else { return }
@@ -511,8 +555,7 @@ final class ChatViewModel {
         }
         self.models = models
         self.agents = agents
-        selectedModel = models.first(where: \.isConnected)
-        selectedAgent = agents.first(where: { $0.name == "build" }) ?? agents.first
+        selectSessionOptions()
     }
 
     private func resetConversationState(clearDraft: Bool) {
@@ -524,6 +567,9 @@ final class ChatViewModel {
         eventTask = nil
         messageRefreshTask?.cancel()
         messageRefreshTask = nil
+        needsMessageRefresh = false
+        sessionRefreshTask?.cancel()
+        sessionRefreshTask = nil
         transcriptionTask?.cancel()
         transcriptionTask = nil
         recorder.cancel()
@@ -537,6 +583,7 @@ final class ChatViewModel {
         eventsConnected = false
         isCreatingSession = false
         isSending = false
+        isRenaming = false
         isTranscribing = false
         submissionOutcomeUncertain = false
         isDeleted = false
@@ -612,29 +659,33 @@ final class ChatViewModel {
             do {
                 let stream = try await client.events()
                 guard eventGeneration == requestedGeneration else { return }
-                eventsConnected = true
-                if attempt > 0 {
-                    await refreshMessages()
-                    await refreshStatus()
-                }
-                attempt = 0
                 for try await event in stream {
                     try Task.checkCancellation()
                     guard eventGeneration == requestedGeneration else { return }
-                    handle(event)
+                    if event.event == .connected {
+                        eventsConnected = true
+                        attempt = 0
+                        await synchronizeConversation()
+                        guard eventGeneration == requestedGeneration else { return }
+                    } else {
+                        handle(event)
+                    }
                 }
                 if eventGeneration == requestedGeneration {
                     eventsConnected = false
                 }
+                // An orderly EOF is also a disconnection: back off rather than busy-looping.
+                attempt += 1
             } catch is CancellationError {
                 break
             } catch {
                 guard eventGeneration == requestedGeneration else { return }
                 eventsConnected = false
                 attempt += 1
-                let delay = min(pow(2, Double(attempt)), 30) + Double.random(in: 0...0.4)
-                try? await Task.sleep(for: .seconds(delay))
             }
+            guard !Task.isCancelled, eventGeneration == requestedGeneration else { break }
+            let delay = min(pow(2, Double(attempt)), 30) + Double.random(in: 0...0.4)
+            try? await Task.sleep(for: .seconds(delay))
         }
         if eventGeneration == requestedGeneration {
             eventsConnected = false
@@ -644,7 +695,10 @@ final class ChatViewModel {
 
     private func handle(_ globalEvent: OpenCodeGlobalEvent) {
         guard let route else { return }
-        if let directory = globalEvent.directory, !sameDirectory(directory, route.project.worktree) {
+        if let directory = globalEvent.directory,
+            !sameDirectory(directory, route.session.directory),
+            globalEvent.event != .sessionChanged(sessionID: route.session.id)
+        {
             return
         }
 
@@ -663,6 +717,15 @@ final class ChatViewModel {
         case let .sessionDeleted(session) where session.id == route.session.id:
             isDeleted = true
             presentedError = String(localized: "This conversation was deleted on the server.")
+        case let .sessionRemoved(sessionID) where sessionID == route.session.id:
+            isDeleted = true
+            presentedError = String(localized: "This conversation was deleted on the server.")
+        case let .sessionChanged(sessionID) where sessionID == route.session.id:
+            sessionRefreshTask?.cancel()
+            sessionRefreshTask = Task { [weak self] in
+                await self?.refreshSession()
+                self?.sessionRefreshTask = nil
+            }
         case let .sessionStatus(sessionID, status) where sessionID == route.session.id:
             self.status = status
         case let .sessionIdle(sessionID) where sessionID == route.session.id:
@@ -681,6 +744,8 @@ final class ChatViewModel {
         case let .permissionReplied(sessionID, permissionID) where sessionID == route.session.id:
             permissions.removeAll { $0.id == permissionID }
         case let .sessionError(sessionID, message) where sessionID == nil || sessionID == route.session.id:
+            status = .idle
+            scheduleMessageRefresh()
             presentedError = message ?? String(localized: "OpenCode reported a session error.")
         default:
             break
@@ -718,19 +783,81 @@ final class ChatViewModel {
     }
 
     private func scheduleMessageRefresh() {
-        messageRefreshTask?.cancel()
+        needsMessageRefresh = true
+        guard messageRefreshTask == nil else { return }
         messageRefreshTask = Task { [weak self] in
-            try? await Task.sleep(for: .milliseconds(180))
-            guard !Task.isCancelled else { return }
-            await self?.refreshMessages()
-            self?.messageRefreshTask = nil
+            guard let self else { return }
+            while self.needsMessageRefresh, !Task.isCancelled {
+                do {
+                    try await Task.sleep(for: .milliseconds(180))
+                } catch { return }
+                self.needsMessageRefresh = false
+                await self.refreshMessages()
+            }
+            if !Task.isCancelled { self.messageRefreshTask = nil }
+        }
+    }
+
+    private func synchronizeConversation() async {
+        await refreshSession()
+        guard !Task.isCancelled else { return }
+        await refreshMessages()
+        await refreshStatus()
+        await refreshPermissions()
+    }
+
+    private func refreshSession() async {
+        guard let route, let client else { return }
+        let requestedGeneration = generation
+        do {
+            let session = try await client.session(
+                sessionID: route.session.id, directory: route.session.directory)
+            guard generation == requestedGeneration, !Task.isCancelled else { return }
+            let project = OpenCodeProject(
+                id: session.projectID, worktree: session.directory, vcs: route.project.vcs)
+            let updatedRoute = SessionRoute(profileID: route.profileID, project: project, session: session)
+            self.route = updatedRoute
+            sessionRouteChanged?(updatedRoute)
+            selectSessionOptions()
+        } catch NetworkError.httpStatus(404, _) {
+            guard generation == requestedGeneration, !Task.isCancelled else { return }
+            isDeleted = true
+            presentedError = String(localized: "This conversation was deleted on the server.")
+        } catch {
+            // Keep the visible route on transient failures; timeline and permission
+            // reconciliation can still recover independently.
+        }
+    }
+
+    private func selectSessionOptions() {
+        selectedModel = models.first {
+            $0.providerID == route?.session.providerID && $0.modelID == route?.session.modelID
+                && $0.variant == route?.session.variant
+        }
+        selectedAgent = agents.first { $0.id == route?.session.agentID }
+    }
+
+    private func refreshPermissions() async {
+        guard let route, let client else { return }
+        let requestedGeneration = generation
+        do {
+            let permissions = try await client.permissions(
+                sessionID: route.session.id, directory: route.session.directory
+            )
+            guard generation == requestedGeneration, !Task.isCancelled else { return }
+            self.permissions = permissions
+        } catch {
+            guard generation == requestedGeneration, !Task.isCancelled else { return }
+            presentedError = error.localizedDescription
         }
     }
 
     private func refreshStatus() async {
         guard let route, let client else { return }
         do {
-            let statuses = try await client.sessionStatuses(directory: route.project.worktree)
+            let requestedGeneration = generation
+            let statuses = try await client.sessionStatuses(directory: route.session.directory)
+            guard generation == requestedGeneration, !Task.isCancelled else { return }
             status = statuses[route.session.id] ?? .idle
         } catch is CancellationError {
             return
@@ -757,7 +884,7 @@ final class ChatViewModel {
     private static func hasAmbiguousOutcome(_ error: Error) -> Bool {
         guard let networkError = error as? NetworkError else { return false }
         switch networkError {
-        case .invalidURL, .insecureRemoteURL:
+        case .invalidURL, .insecureRemoteURL, .unsupportedServerVersion:
             return false
         case let .httpStatus(status, _):
             return status >= 500 || status == 408

@@ -1,17 +1,41 @@
 import Foundation
 
+// Released OpenCode V2 wire contracts, separate from presentation models.
+struct DataResponseDTO<Value: Decodable & Sendable>: Decodable, Sendable {
+    let data: Value
+}
+
+struct PageDTO<Value: Decodable & Sendable>: Decodable, Sendable {
+    struct Cursor: Decodable, Sendable {
+        let previous: String?
+        let next: String?
+    }
+
+    let data: [Value]
+    let cursor: Cursor
+}
+
 struct HealthDTO: Decodable, Sendable {
-    let healthy: Bool
     let version: String
+}
+
+struct LocationDTO: Codable, Sendable {
+    let directory: String?
+}
+
+struct ModelReferenceDTO: Codable, Sendable {
+    let id: String
+    let providerID: String
+    let variant: String?
 }
 
 struct ProjectDTO: Decodable, Sendable {
     let id: String
-    let worktree: String
+    let canonical: String
     let vcs: String?
 
     func domain() -> OpenCodeProject {
-        OpenCodeProject(id: id, worktree: worktree, vcs: vcs)
+        OpenCodeProject(id: id, worktree: canonical, vcs: vcs)
     }
 }
 
@@ -21,40 +45,80 @@ struct SessionDTO: Decodable, Sendable {
         let updated: Double
     }
 
-    struct SummaryDTO: Decodable, Sendable {
-        let additions: Int
-        let deletions: Int
-        let files: Int
-    }
-
     let id: String
     let projectID: String
-    let directory: String
+    let location: LocationDTO
     let parentID: String?
-    let title: String
-    let version: String
+    let title: String?
     let time: TimeDTO
-    let summary: SummaryDTO?
+    let agent: String?
+    let model: ModelReferenceDTO?
 
     func domain() -> OpenCodeSession {
         OpenCodeSession(
             id: id,
             projectID: projectID,
-            directory: directory,
+            directory: location.directory ?? "",
             parentID: parentID,
-            title: title,
-            version: version,
+            title: title ?? String(localized: "New Chat"),
+            version: "",
             createdAt: Self.date(from: time.created),
             updatedAt: Self.date(from: time.updated),
-            summary: summary.map {
-                .init(additions: $0.additions, deletions: $0.deletions, files: $0.files)
-            }
+            summary: nil,
+            agentID: agent,
+            providerID: model?.providerID,
+            modelID: model?.id,
+            variant: model?.variant
         )
     }
 
     static func date(from timestamp: Double) -> Date {
-        let seconds = timestamp > 10_000_000_000 ? timestamp / 1_000 : timestamp
-        return Date(timeIntervalSince1970: seconds)
+        // V2 wire timestamps are always epoch milliseconds, including small fixture values.
+        Date(timeIntervalSince1970: timestamp / 1_000)
+    }
+}
+
+struct SessionUpdateDTO: Encodable, Sendable {
+    let title: String
+}
+
+struct FileDiffDTO: Decodable, Sendable {
+    let file: String
+    let status: String
+    let additions: Int
+    let deletions: Int
+    let patch: String
+
+    func domain() -> OpenCodeFileDiff {
+        let domainStatus: OpenCodeFileDiffStatus
+        switch status {
+        case "added": domainStatus = .added
+        case "modified": domainStatus = .modified
+        case "deleted": domainStatus = .deleted
+        default: domainStatus = .unknown(status)
+        }
+        return OpenCodeFileDiff(
+            path: file, status: domainStatus, additions: additions, deletions: deletions,
+            patch: patch, before: nil, after: nil
+        )
+    }
+}
+
+struct FileNodeDTO: Decodable, Sendable {
+    let path: String
+    let type: String
+
+    func domain() -> OpenCodeFileNode {
+        let domainType: OpenCodeFileNodeType
+        switch type {
+        case "file": domainType = .file
+        case "directory": domainType = .directory
+        default: domainType = .unknown(type)
+        }
+        return OpenCodeFileNode(
+            name: URL(fileURLWithPath: path).lastPathComponent,
+            path: path, absolutePath: nil, type: domainType, isIgnored: false
+        )
     }
 }
 
@@ -66,28 +130,12 @@ struct SessionStatusDTO: Decodable, Sendable {
 
     func domain() -> OpenCodeSessionStatus {
         switch type {
-        case "idle":
-            return .idle
-        case "busy":
-            return .busy
+        case "idle": .idle
+        case "busy", "running": .busy
         case "retry":
-            return .retry(
-                attempt: attempt ?? 0,
-                message: message ?? "",
-                next: next.map(SessionDTO.date(from:))
-            )
-        default:
-            return .unknown(type)
+            .retry(attempt: attempt ?? 0, message: message ?? "", next: next.map(SessionDTO.date(from:)))
+        default: .unknown(type)
         }
-    }
-}
-
-struct MessageEnvelopeDTO: Decodable, Sendable {
-    let info: MessageDTO
-    let parts: [PartDTO]
-
-    func domain() -> ChatMessage {
-        info.domain(parts: parts.map { $0.domain() })
     }
 }
 
@@ -97,227 +145,161 @@ struct MessageDTO: Decodable, Sendable {
         let completed: Double?
     }
 
-    struct ModelDTO: Decodable, Sendable {
-        let providerID: String
-        let modelID: String
-    }
-
     let id: String
-    let sessionID: String
-    let role: String
-    let time: TimeDTO
-    let providerID: String?
-    let modelID: String?
-    let model: ModelDTO?
-    let error: JSONValue?
-
-    func domain(parts: [MessagePart]) -> ChatMessage {
-        let errorMessage =
-            error?["data"]?["message"]?.stringValue
-            ?? error?["message"]?.stringValue
-            ?? error?["name"]?.stringValue
-
-        return ChatMessage(
-            id: id,
-            sessionID: sessionID,
-            role: ChatRole(rawValue: role) ?? .unknown,
-            createdAt: SessionDTO.date(from: time.created),
-            completedAt: time.completed.map(SessionDTO.date(from:)),
-            providerID: providerID ?? model?.providerID,
-            modelID: modelID ?? model?.modelID,
-            errorMessage: errorMessage,
-            parts: parts
-        )
-    }
-}
-
-struct PartDTO: Decodable, Sendable {
-    struct ToolStateDTO: Decodable, Sendable {
-        let status: String
-        let input: JSONValue?
-        let title: String?
-        let output: String?
-        let error: String?
-    }
-
-    let id: String
-    let sessionID: String
-    let messageID: String
     let type: String
-    let text: String?
-    let synthetic: Bool?
-    let tool: String?
-    let callID: String?
-    let state: ToolStateDTO?
-    let filename: String?
-    let mime: String?
-    let url: String?
-    let files: [String]?
+    let time: TimeDTO
+    private let value: JSONValue
 
     private enum CodingKeys: String, CodingKey {
-        case id
-        case sessionID
-        case messageID
-        case type
-        case text
-        case synthetic
-        case tool
-        case callID
-        case state
-        case filename
-        case mime
-        case url
-        case files
+        case id, type, time
     }
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(String.self, forKey: .id)
         type = try container.decode(String.self, forKey: .type)
-        sessionID = try container.decodeIfPresent(String.self, forKey: .sessionID) ?? ""
-        messageID = try container.decodeIfPresent(String.self, forKey: .messageID) ?? ""
-        id =
-            try container.decodeIfPresent(String.self, forKey: .id)
-            ?? "\(messageID)-\(type)-unknown"
-        text = try container.decodeIfPresent(String.self, forKey: .text)
-        synthetic = try container.decodeIfPresent(Bool.self, forKey: .synthetic)
-        tool = try container.decodeIfPresent(String.self, forKey: .tool)
-        callID = try container.decodeIfPresent(String.self, forKey: .callID)
-        state = try container.decodeIfPresent(ToolStateDTO.self, forKey: .state)
-        filename = try container.decodeIfPresent(String.self, forKey: .filename)
-        mime = try container.decodeIfPresent(String.self, forKey: .mime)
-        url = try container.decodeIfPresent(String.self, forKey: .url)
-        files = try container.decodeIfPresent([String].self, forKey: .files)
+        time = try container.decode(TimeDTO.self, forKey: .time)
+        value = try JSONValue(from: decoder)
     }
 
-    func domain() -> MessagePart {
+    func domain(sessionID: String) -> ChatMessage {
+        let parts: [MessagePart]
         switch type {
-        case "text":
-            return .text(id: id, text: text ?? "", synthetic: synthetic ?? false)
-        case "reasoning":
-            return .reasoning(id: id, text: text ?? "")
+        case "assistant":
+            parts = (value["content"]?.arrayValue ?? []).enumerated().map { index, part in
+                PartDTO.domain(from: part, id: "\(id)-content-\(index)")
+            }
+        case "user", "synthetic", "system", "skill":
+            var content: [MessagePart] = [
+                .text(id: "\(id)-text", text: value["text"]?.stringValue ?? "", synthetic: type != "user")
+            ]
+            for (index, file) in (value["files"]?.arrayValue ?? []).enumerated() {
+                let mime = file["mime"]?.stringValue ?? "application/octet-stream"
+                content.append(
+                    .file(
+                        id: "\(id)-file-\(index)", filename: file["name"]?.stringValue, mime: mime,
+                        url: "data:\(mime);base64,\(file["data"]?.stringValue ?? "")"
+                    )
+                )
+            }
+            parts = content
+        case "shell":
+            parts = [
+                .tool(
+                    ToolCall(
+                        id: id, callID: value["shellID"]?.stringValue ?? id, tool: "shell",
+                        status: value["status"]?.stringValue == "running" ? .running : .completed,
+                        title: value["command"]?.stringValue, input: nil,
+                        output: value["output"]?["output"]?.stringValue, error: nil
+                    )
+                )
+            ]
+        case "compaction":
+            parts = [.text(id: "\(id)-text", text: value["summary"]?.stringValue ?? "", synthetic: true)]
+        default:
+            parts = [.unknown(id: id, type: type)]
+        }
+        return ChatMessage(
+            id: id, sessionID: sessionID,
+            role: type == "user" ? .user : (type == "assistant" ? .assistant : .unknown),
+            createdAt: SessionDTO.date(from: time.created),
+            completedAt: time.completed.map(SessionDTO.date(from:)),
+            providerID: value["model"]?["providerID"]?.stringValue,
+            modelID: value["model"]?["id"]?.stringValue,
+            errorMessage: value["error"]?["message"]?.stringValue, parts: parts
+        )
+    }
+}
+
+enum PartDTO {
+    static func domain(from value: JSONValue, id: String) -> MessagePart {
+        let type = value["type"]?.stringValue ?? "unknown"
+        switch type {
+        case "text": return .text(id: id, text: value["text"]?.stringValue ?? "", synthetic: false)
+        case "reasoning": return .reasoning(id: id, text: value["text"]?.stringValue ?? "")
         case "tool":
-            let rawStatus = state?.status ?? "unknown"
+            let state = value["state"]
+            let status = state?["status"]?.stringValue ?? "unknown"
             return .tool(
                 ToolCall(
-                    id: id,
-                    callID: callID ?? id,
-                    tool: tool ?? String(localized: "Tool"),
-                    status: ToolCallStatus(rawValue: rawStatus) ?? .unknown,
-                    title: state?.title,
-                    input: state?.input,
-                    output: state?.output,
-                    error: state?.error
+                    id: value["id"]?.stringValue ?? id, callID: value["id"]?.stringValue ?? id,
+                    tool: value["name"]?.stringValue ?? String(localized: "Tool"),
+                    status: status == "streaming" ? .pending : (ToolCallStatus(rawValue: status) ?? .unknown),
+                    title: state?["metadata"]?["title"]?.stringValue, input: state?["input"],
+                    output: state?["content"]?.arrayValue?.compactMap { $0["text"]?.stringValue }
+                        .joined(separator: "\n"),
+                    error: state?["error"]?["message"]?.stringValue
                 )
             )
-        case "file":
-            return .file(id: id, filename: filename, mime: mime ?? "application/octet-stream", url: url ?? "")
-        case "patch":
-            return .patch(id: id, files: files ?? [])
-        default:
-            return .unknown(id: id, type: type)
+        default: return .unknown(id: id, type: type)
         }
     }
 }
 
 struct PermissionDTO: Decodable, Sendable {
+    struct Source: Decodable, Sendable {
+        let messageID: String?
+    }
+
     let id: String
-    let type: String
-    let pattern: JSONValue?
     let sessionID: String
-    let messageID: String
-    let title: String
+    let action: String
+    let resources: [String]
+    let source: Source?
+    let message: String?
 
     func domain() -> PermissionRequest {
-        let patterns: [String]
-        switch pattern {
-        case let .string(value):
-            patterns = [value]
-        case let .array(values):
-            patterns = values.compactMap(\.stringValue)
-        default:
-            patterns = []
-        }
-
-        return PermissionRequest(
-            id: id,
-            sessionID: sessionID,
-            messageID: messageID,
-            type: type,
-            title: title,
-            patterns: patterns
+        PermissionRequest(
+            id: id, sessionID: sessionID, messageID: source?.messageID ?? "",
+            type: action, title: message ?? action, patterns: resources
         )
     }
 }
 
-struct ProviderResponseDTO: Decodable, Sendable {
-    struct ProviderDTO: Decodable, Sendable {
-        struct ModelDTO: Decodable, Sendable {
-            let id: String?
-            let name: String?
-        }
-
+struct ModelDTO: Decodable, Sendable {
+    struct Variant: Decodable, Sendable {
         let id: String
-        let name: String
-        let models: [String: ModelDTO]
     }
 
-    let all: [ProviderDTO]
-    let connected: [String]
+    let id: String
+    let providerID: String
+    let name: String
+    let enabled: Bool
+    let variants: [Variant]
 
     func domain() -> [ModelOption] {
-        let connectedSet = Set(connected)
-        return all.flatMap { provider in
-            provider.models.map { key, model in
+        let base = ModelOption(
+            providerID: providerID, modelID: id, providerName: providerID, name: name, isConnected: enabled
+        )
+        return [base]
+            + variants.map {
                 ModelOption(
-                    providerID: provider.id,
-                    modelID: model.id ?? key,
-                    providerName: provider.name,
-                    name: model.name ?? model.id ?? key,
-                    isConnected: connectedSet.contains(provider.id)
+                    providerID: providerID, modelID: id, providerName: providerID,
+                    name: "\(name) · \($0.id)", isConnected: enabled, variant: $0.id
                 )
             }
-        }
-        .sorted {
-            if $0.isConnected != $1.isConnected { return $0.isConnected }
-            if $0.providerName != $1.providerName { return $0.providerName < $1.providerName }
-            return $0.name < $1.name
-        }
     }
 }
 
 struct AgentDTO: Decodable, Sendable {
+    let id: String
     let name: String
     let description: String?
     let mode: String
-    let builtIn: Bool
+    let hidden: Bool
 
     func domain() -> AgentOption {
-        AgentOption(name: name, description: description, mode: mode, isBuiltIn: builtIn)
+        AgentOption(name: name, description: description, mode: mode, isBuiltIn: false, agentID: id)
     }
 }
 
 struct EventEnvelopeDTO: Decodable, Sendable {
-    struct PayloadDTO: Decodable, Sendable {
-        let type: String
-        let properties: JSONValue
-    }
-
-    let directory: String?
-    let payload: PayloadDTO
+    let type: String
+    let location: LocationDTO?
+    let data: JSONValue?
 }
 
 struct PromptBodyDTO: Encodable, Sendable {
-    struct TextPart: Encodable, Sendable {
-        let type = "text"
-        let text: String
-    }
-
-    struct Model: Encodable, Sendable {
-        let providerID: String
-        let modelID: String
-    }
-
-    let model: Model?
-    let agent: String?
-    let parts: [TextPart]
+    let id: String
+    let text: String
 }

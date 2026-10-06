@@ -22,6 +22,9 @@ FluidVoice dictation. It does not run OpenCode or language models on-device.
 - Depend on protocols at feature boundaries and inject live implementations from `AppDependencies`.
 - Keep wire DTOs separate from UI-facing domain models when the server contract may evolve.
 - Every project-scoped OpenCode request must carry the selected `directory` query parameter.
+- Use the released V2 API; location-scoped routes additionally need `location[directory]` and session
+  creation needs a body `location`. Scope session operations to the session's actual directory.
+- Do not pin compatibility to a particular OpenCode patch release; use API contracts, not version gates.
 - Unknown OpenCode event and part types must not make decoding the entire response fail.
 - Never place passwords, tokens, audio, prompts, file contents, or server URLs in public logs.
 - Store secrets in Keychain, never UserDefaults or source files.
